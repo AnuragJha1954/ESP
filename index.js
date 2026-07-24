@@ -5,6 +5,9 @@ const axios = require('axios');
 const { authenticator } = require('otplib');
 const crypto = require('crypto');
 
+// In-memory cache to eliminate Database latency on hot trading requests
+let cachedAccessToken = null;
+
 const app = express();
 app.use(express.json());
 
@@ -141,6 +144,8 @@ app.all('/api/fyers/generate-access-token', async (req, res) => {
                 updated_at = CURRENT_TIMESTAMP;
             `, [finalAccessToken]);
 
+            cachedAccessToken = finalAccessToken; // Update cache immediately
+
             return res.status(200).json({
                 status: 'success',
                 message: 'Auto-login successful! Access token saved to Neon DB.',
@@ -188,13 +193,17 @@ const processTrade = async (req, res, tradeType, side, optionType) => {
             return res.status(500).json({ status: 'error', message: 'Server misconfiguration: Missing FYERS_APP_ID or FYERS_SYMBOL_PREFIX' });
         }
 
-        // Fetch token from DB
-        const result = await pool.query(`SELECT access_token FROM fyers_auth WHERE id = 1 LIMIT 1`);
-        if (result.rows.length === 0) {
-            console.log(`FAILURE: ${tradeType} - No access token found in database.`);
-            return res.status(401).json({ status: 'error', message: 'Not authenticated with Fyers. Generate token first.' });
+        // Fetch token from Cache or DB
+        let accessToken = cachedAccessToken;
+        if (!accessToken) {
+            const result = await pool.query(`SELECT access_token FROM fyers_auth WHERE id = 1 LIMIT 1`);
+            if (result.rows.length === 0) {
+                console.log(`FAILURE: ${tradeType} - No access token found in database.`);
+                return res.status(401).json({ status: 'error', message: 'Not authenticated with Fyers. Generate token first.' });
+            }
+            accessToken = result.rows[0].access_token;
+            cachedAccessToken = accessToken; // Store in memory for next ultra-fast request
         }
-        const accessToken = result.rows[0].access_token;
         
         // Setup Fyers SDK
         fyers.setAppId(appId);
