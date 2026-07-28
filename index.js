@@ -238,7 +238,7 @@ app.all('/api/fyers/generate-access-token', async (req, res) => {
 
 const executeTrade = async (req, res, side) => {
     try {
-        const { quantity, strike, type } = req.body;
+        const { quantity, strike, type, index, expiry } = req.body;
         
         if (!quantity || !strike || !type) {
             return res.status(400).json({ status: 'error', message: 'Missing quantity, strike, or type (CE/PE)' });
@@ -264,8 +264,12 @@ const executeTrade = async (req, res, side) => {
         fyers.setRedirectUrl("https://trade.fyers.in/api-login/redirect-uri/index.html");
         fyers.setAccessToken(accessToken);
 
-        // Construct dynamic symbol (Hardcoding 26JUL as the active contract month)
-        const tradingSymbol = `NSE:NIFTY26JUL${strike}${optionType}`;
+        // Determine Underlying and Expiry dynamically
+        const underlying = (index && index.includes('BANKNIFTY')) ? 'BANKNIFTY' : 'NIFTY';
+        const expiryCode = expiry || '26AUG'; // Fallback to August if not provided
+
+        // Construct dynamic symbol
+        const tradingSymbol = `NSE:${underlying}${expiryCode}${strike}${optionType}`;
 
         console.log(`Executing ${side === 1 ? 'BUY' : 'SELL'} -> ${tradingSymbol} | Qty: ${quantity}`);
 
