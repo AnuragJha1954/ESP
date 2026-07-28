@@ -1,0 +1,229 @@
+:root {
+  --bg-dark: #000000;
+  --bg-card: #ffffff;
+  --text-main: #ffffff;
+  --text-inverse: #000000;
+  --text-muted: #8e8e93;
+  --text-muted-inverse: #6b7280;
+  --accent-green: #379c6d;
+  --accent-red: #ff3b30;
+  --accent-blue: #3b82f6;
+  --accent-purple: #8b5cf6;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Outfit', sans-serif;
+}
+
+body {
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
+}
+
+/* Animations */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.8s ease-out forwards;
+}
+
+/* Base button styles */
+button {
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s;
+  font-family: 'Outfit', sans-serif;
+}
+
+button:active {
+  transform: scale(0.94);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Layout */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 1.5rem 1.5rem 100px 1.5rem;
+}
+
+/* Futuristic White Card -> Dark Glass Card */
+.futuristic-card {
+  background: linear-gradient(135deg, rgba(40, 40, 40, 0.8) 0%, rgba(15, 15, 15, 0.9) 100%);
+  border-radius: 24px;
+  padding: 24px;
+  color: #ffffff;
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.futuristic-pill {
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  transition: all 0.3s ease;
+  font-family: 'Outfit', sans-serif;
+  cursor: pointer;
+}
+
+.futuristic-pill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Bottom Nav Overhaul */
+.bottom-nav {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 75px;
+  display: flex;
+  justify-content: space-evenly;
+  width: 90%;
+  max-width: 400px;
+  align-items: center;
+  background: rgba(20, 20, 20, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0 1rem;
+  border-radius: 40px;
+  z-index: 50;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+}
+
+.nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  transition: all 0.3s ease;
+  background: rgba(255, 255, 255, 0.05);
+  color: #8e8e93;
+}
+
+.nav-item.active {
+  background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+  color: #ffffff;
+  box-shadow: 0 4px 15px rgba(124, 58, 237, 0.3);
+}
+
+.futuristic-pill:active {
+  transform: scale(0.95);
+  opacity: 0.9;
+}
+
+@keyframes ping {
+  75%, 100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes pulse-opacity {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Custom inputs inside white cards */
+.futuristic-input {
+  background: transparent;
+  color: #ffffff;
+  border: none;
+  font-size: 1.1rem;
+  font-weight: 600;
+  outline: none;
+  width: 100%;
+  text-align: center;
+}
+
+/* Custom Select Dropdowns */
+.futuristic-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 2px solid transparent;
+  padding: 14px 16px;
+  border-radius: 16px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #ffffff;
+  outline: none;
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.2s ease;
+  /* Custom Chevron in White */
+  background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23ffffff%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  background-size: 12px auto;
+}
+
+.futuristic-select:focus {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.2);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.futuristic-input-container {
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 16px;
+  padding: 4px;
+  border: 2px solid transparent;
+  transition: all 0.2s ease;
+  color: #ffffff;
+}
+
+.futuristic-input-container:focus-within {
+  border-color: #7c3aed;
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.2);
+  background-color: rgba(255, 255, 255, 0.1);
+}
