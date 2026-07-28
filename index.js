@@ -2,9 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const sqlite3 = require('sqlite3');
 const { open } = require('sqlite');
-const fyers = require("fyers-api-v3");
+const { fyersModel } = require("fyers-api-v3");
 const axios = require('axios');
-const { authenticator } = require('otplib');
 const crypto = require('crypto');
 
 // In-memory cache to eliminate Database latency on hot trading requests
@@ -44,15 +43,54 @@ function generateAppIdHash(clientId, secretKey) {
     return hash.digest('hex');
 }
 
+// Native Zero-Dependency TOTP Generator
+function base32tohex(base32) {
+    let base32chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let bits = "";
+    let hex = "";
+    for (let i = 0; i < base32.length; i++) {
+        let val = base32chars.indexOf(base32.charAt(i).toUpperCase());
+        if (val === -1) continue;
+        bits += val.toString(2).padStart(5, '0');
+    }
+    for (let i = 0; i + 4 <= bits.length; i += 4) {
+        let chunk = bits.substring(i, i + 4);
+        hex = hex + parseInt(chunk, 2).toString(16);
+    }
+    return hex;
+}
+
+function generateTOTP(secret) {
+    const key = Buffer.from(base32tohex(secret), 'hex');
+    const epoch = Math.round(Date.now() / 1000.0);
+    const time = Buffer.alloc(8);
+    let timeVal = Math.floor(epoch / 30);
+    for (let i = 7; i >= 0; i--) {
+        time[i] = timeVal & 0xff;
+        timeVal >>= 8;
+    }
+    const hmac = crypto.createHmac('sha1', key);
+    hmac.update(time);
+    const result = hmac.digest();
+    const offset = result[result.length - 1] & 0xf;
+    const otp = (
+        ((result[offset] & 0x7f) << 24) |
+        ((result[offset + 1] & 0xff) << 16) |
+        ((result[offset + 2] & 0xff) << 8) |
+        (result[offset + 3] & 0xff)
+    ) % 1000000;
+    return otp.toString().padStart(6, '0');
+}
+
 // Auto-login endpoint to bypass the browser
 app.all('/api/fyers/generate-access-token', async (req, res) => {
     try {
-        const fy_id = process.env.FYERS_ID || req.body?.fy_id;
-        const totp_secret = process.env.FYERS_TOTP_SECRET || req.body?.totp_secret;
-        const pin = process.env.FYERS_PIN || req.body?.pin;
-        const appId = process.env.FYERS_APP_ID || req.body?.client_id;
-        const secretKey = process.env.FYERS_SECRET_KEY || req.body?.secret_key;
-        const redirectUri = process.env.FYERS_REDIRECT_URI || "https://trade.fyers.in/api-login/redirect-uri/index.html"; // Standard default
+        const fy_id = "FAJ97539";
+        const totp_secret = "C3AXMFE42T3PKWJB3H536RBDPW2SYPK3";
+        const pin = "8259";
+        const appId = "0LJX4AMOQB-200";
+        const secretKey = "mouPEyXd92TrnWs6";
+        const redirectUri = "https://trade.fyers.in/api-login/redirect-uri/index.html";
 
         if (!fy_id || !totp_secret || !pin || !appId || !secretKey) {
             return res.status(500).json({ 
@@ -61,64 +99,88 @@ app.all('/api/fyers/generate-access-token', async (req, res) => {
             });
         }
         
+        const baseAppId = appId.includes('-') ? appId.split('-')[0] : appId;
         const appIdHash = generateAppIdHash(appId, secretKey);
 
+        console.log("-----------------------------------------");
         console.log("Step 1: Sending Login OTP Request...");
-        const sendOtpResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/send_login_otp_v2', {
-            fy_id: fy_id,
+        const payload1 = {
+            fy_id: Buffer.from(fy_id).toString('base64'),
             app_id: "2" // App id 2 is usually required for vagator authentication
-        });
+        };
+        console.log("Req Body:", JSON.stringify(payload1));
+        const sendOtpResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/send_login_otp_v2', payload1);
+        console.log("Response:", JSON.stringify(sendOtpResponse.data));
         
-        if (sendOtpResponse.data.code !== 200) {
+        if (sendOtpResponse.data.code !== 200 && sendOtpResponse.data.code !== 1043 && sendOtpResponse.data.s !== 'ok') {
             throw new Error(`Failed to send OTP: ${JSON.stringify(sendOtpResponse.data)}`);
         }
         
         const requestKey = sendOtpResponse.data.request_key;
 
+        console.log("-----------------------------------------");
         console.log("Step 2: Generating TOTP and Verifying...");
-        const totp = authenticator.generate(totp_secret);
+        const totp = generateTOTP(totp_secret);
         
-        const verifyOtpResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/verify_otp', {
+        console.log("=========================================");
+        console.log("GENERATED 6-DIGIT TOTP CODE:", totp);
+        console.log("=========================================");
+        
+        const payload2 = {
             request_key: requestKey,
             otp: totp
-        });
+        };
+        console.log("Req Body:", JSON.stringify(payload2));
+        const verifyOtpResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/verify_otp', payload2);
+        console.log("Response:", JSON.stringify(verifyOtpResponse.data));
         
-        if (verifyOtpResponse.data.code !== 200) {
+        if (verifyOtpResponse.data.code !== 200 && verifyOtpResponse.data.s !== 'ok') {
             throw new Error(`Failed to verify TOTP: ${JSON.stringify(verifyOtpResponse.data)}`);
         }
         
         const requestKey2 = verifyOtpResponse.data.request_key;
 
+        console.log("-----------------------------------------");
         console.log("Step 3: Verifying PIN...");
-        const verifyPinResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/verify_pin_v2', {
+        const payload3 = {
             request_key: requestKey2,
             identity_type: "pin",
-            identifier: pin
-        });
+            identifier: Buffer.from(pin).toString('base64')
+        };
+        console.log("Req Body:", JSON.stringify(payload3));
+        const verifyPinResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/verify_pin_v2', payload3);
+        console.log("Response:", JSON.stringify(verifyPinResponse.data));
         
-        if (verifyPinResponse.data.code !== 200) {
+        if (verifyPinResponse.data.code !== 200 && verifyPinResponse.data.s !== 'ok') {
             throw new Error(`Failed to verify PIN: ${JSON.stringify(verifyPinResponse.data)}`);
         }
 
         const accessTokenVagator = verifyPinResponse.data.data.access_token;
 
+        console.log("-----------------------------------------");
         console.log("Step 4: Getting Auth Code...");
-        const authCodeResponse = await axios.post('https://api-t1.fyers.in/api/v3/token', {
+        const payload4 = {
             fyers_id: fy_id,
-            app_id: appId,
+            app_id: appId.includes('-') ? appId.split('-')[0] : appId,
             redirect_uri: redirectUri,
-            appType: "100",
+            appType: appId.includes('-') ? appId.split('-')[1] : "100",
             code_challenge: "",
-            state: "None",
+            state: crypto.randomBytes(8).toString('hex'),
             scope: "",
             nonce: "",
             response_type: "code",
             create_cookie: true
-        }, {
+        };
+        console.log("Req Body:", JSON.stringify(payload4));
+        const authCodeResponse = await axios.post('https://api-t1.fyers.in/api/v3/token', payload4, {
             headers: {
                 'Authorization': `Bearer ${accessTokenVagator}`
+            },
+            validateStatus: function (status) {
+                return status >= 200 && status < 400; // Accept 308 Redirect as success
             }
         });
+        console.log("Response:", JSON.stringify(authCodeResponse.data));
         
         if (authCodeResponse.data.s !== 'ok') {
             throw new Error(`Failed to get auth code: ${JSON.stringify(authCodeResponse.data)}`);
@@ -129,12 +191,17 @@ app.all('/api/fyers/generate-access-token', async (req, res) => {
         const urlParams = new URLSearchParams(authCodeResponse.data.Url.split('?')[1]);
         const authCode = urlParams.get('auth_code');
 
+        console.log("-----------------------------------------");
         console.log("Step 5: Exchanging Auth Code for Access Token...");
-        const tokenResponse = await fyers.generate_access_token({
-            client_id: appId,
-            secret_key: secretKey,
-            auth_code: authCode
-        });
+        const payload5 = {
+            grant_type: "authorization_code",
+            appIdHash: appIdHash,
+            code: authCode
+        };
+        console.log("Req Params:", JSON.stringify(payload5));
+        const tokenReq = await axios.post('https://api-t1.fyers.in/api/v3/validate-authcode', payload5);
+        const tokenResponse = tokenReq.data;
+        console.log("Response:", JSON.stringify(tokenResponse));
 
         if (tokenResponse.s === 'ok' || tokenResponse.access_token) {
             const finalAccessToken = tokenResponse.access_token;
@@ -152,141 +219,89 @@ app.all('/api/fyers/generate-access-token', async (req, res) => {
 
             return res.status(200).json({
                 status: 'success',
-                message: 'Auto-login successful! Access token saved to Neon DB.',
-                data: {
-                    access_token: finalAccessToken
-                }
+                message: 'Login successful and local DB updated with new access token.'
             });
         } else {
             throw new Error(`Failed to generate final access token: ${JSON.stringify(tokenResponse)}`);
         }
 
     } catch (error) {
-        console.error("Auto-Auth Error:", error.message || error);
+        const errorDetail = error.response ? error.response.data : (error.message || String(error));
+        console.error("Auto-Auth Error:", JSON.stringify(errorDetail));
         return res.status(500).json({ 
             status: 'error', 
             message: 'Internal server error during auto-authentication', 
-            error: error.message || String(error)
+            error: errorDetail
         });
     }
 });
 
-// Existing trade logic
-const processTrade = async (req, res, tradeType, side, optionType) => {
+const executeTrade = async (req, res, side) => {
     try {
-        const { quantity, strike_price } = req.body;
+        const { quantity, strike, type } = req.body;
         
-        if (!quantity || !strike_price) {
-            console.log(`FAILURE: ${tradeType} - Missing 'quantity' or 'strike_price' in payload.`);
-            return res.status(400).json({ status: 'error', message: 'Missing quantity or strike_price parameter' });
+        if (!quantity || !strike || !type) {
+            return res.status(400).json({ status: 'error', message: 'Missing quantity, strike, or type (CE/PE)' });
         }
         
-        const numericQuantity = Number(quantity);
-        const numericStrike = Number(strike_price);
-        
-        if (isNaN(numericQuantity) || numericQuantity <= 0 || isNaN(numericStrike) || numericStrike <= 0) {
-            console.log(`FAILURE: ${tradeType} - Invalid numeric values provided.`);
-            return res.status(400).json({ status: 'error', message: 'Quantity and strike_price must be positive numbers' });
+        const optionType = type.toUpperCase();
+        if (optionType !== 'CE' && optionType !== 'PE') {
+            return res.status(400).json({ status: 'error', message: 'type must be CE or PE' });
         }
 
-        const appId = process.env.FYERS_APP_ID;
-        const symbolPrefix = process.env.FYERS_SYMBOL_PREFIX; // e.g., "NSE:NIFTY24OCT"
-
-        if (!appId || !symbolPrefix) {
-            console.log(`FAILURE: ${tradeType} - FYERS_APP_ID or FYERS_SYMBOL_PREFIX missing in environment variables.`);
-            return res.status(500).json({ status: 'error', message: 'Server misconfiguration: Missing FYERS_APP_ID or FYERS_SYMBOL_PREFIX' });
-        }
-
-        // Fetch token from Cache or DB
-        let accessToken = cachedAccessToken;
-        if (!accessToken) {
-            const row = await db.get(`SELECT access_token FROM fyers_auth WHERE id = 1 LIMIT 1`);
-            if (!row) {
-                console.log(`FAILURE: ${tradeType} - No access token found in database.`);
-                return res.status(401).json({ status: 'error', message: 'Not authenticated with Fyers. Generate token first.' });
-            }
-            accessToken = row.access_token;
-            cachedAccessToken = accessToken; // Store in memory for next ultra-fast request
+        // Fetch access token from SQLite DB
+        const row = await db.get(`SELECT access_token FROM fyers_auth WHERE id = 1 LIMIT 1`);
+        if (!row || !row.access_token) {
+            return res.status(401).json({ status: 'error', message: 'No access token found in database. Run auto-auth first.' });
         }
         
+        const accessToken = row.access_token;
+        const appId = "0LJX4AMOQB-200";
+
         // Setup Fyers SDK
+        const fyers = new fyersModel();
         fyers.setAppId(appId);
+        fyers.setRedirectUrl("https://trade.fyers.in/api-login/redirect-uri/index.html");
         fyers.setAccessToken(accessToken);
 
-        // Construct exact trading symbol (e.g. NSE:NIFTY24OCT + 25000 + CE)
-        const tradingSymbol = `${symbolPrefix}${numericStrike}${optionType}`;
+        // Construct dynamic symbol (Hardcoding 26JUL as the active contract month)
+        const tradingSymbol = `NSE:NIFTY26JUL${strike}${optionType}`;
 
-        console.log(`Placing ${tradeType} Order -> Symbol: ${tradingSymbol}, Qty: ${numericQuantity}, Side: ${side}`);
+        console.log(`Executing ${side === 1 ? 'BUY' : 'SELL'} -> ${tradingSymbol} | Qty: ${quantity}`);
 
         // Place the live order
         const orderResponse = await fyers.place_order({
             "symbol": tradingSymbol,
-            "qty": numericQuantity,
+            "qty": Number(quantity),
             "type": 2, // 2 = Market order
             "side": side, // 1 = Buy, -1 = Sell
-            "productType": "INTRADAY", // Defaulting to INTRADAY
+            "productType": "INTRADAY",
             "limitPrice": 0,
             "stopPrice": 0,
             "validity": "DAY",
             "disclosedQty": 0,
-            "offlineOrder": false
+            "offlineOrder": false,
+            "stopLoss": 0,
+            "takeProfit": 0,
+            "orderTag": "APIOrder",
+            "isSliceOrder": false
         });
 
-        if (orderResponse.s === 'ok' || orderResponse.id) {
-            console.log(`SUCCESS: ${tradeType} - Order ID: ${orderResponse.id}`);
-            return res.status(200).json({
-                status: 'success',
-                message: `${tradeType} order placed successfully`,
-                order_id: orderResponse.id,
-                symbol: tradingSymbol,
-                quantity: numericQuantity
-            });
-        } else {
-            console.log(`FAILURE: ${tradeType} - Fyers API rejected order: ${JSON.stringify(orderResponse)}`);
-            return res.status(400).json({
-                status: 'error',
-                message: 'Failed to place order with Fyers',
-                details: orderResponse
-            });
-        }
-        
+        return res.status(200).json({
+            status: "success",
+            message: "Order placed",
+            symbol: tradingSymbol,
+            fyers_response: orderResponse
+        });
+
     } catch (error) {
-        console.log(`FAILURE: ${tradeType} - Unexpected Error: ${error.message}`);
+        console.log(`FAILURE: Execute Trade - Error: ${error.message}`);
         return res.status(500).json({ status: 'error', message: 'Internal server error', error: error.message });
     }
 };
 
-app.post('/api/buy/call', (req, res) => processTrade(req, res, 'Buy Call', 1, 'CE'));
-app.post('/api/buy/put', (req, res) => processTrade(req, res, 'Buy Put', 1, 'PE'));
-app.post('/api/sell/call', (req, res) => processTrade(req, res, 'Sell Call', -1, 'CE'));
-app.post('/api/sell/put', (req, res) => processTrade(req, res, 'Sell Put', -1, 'PE'));
-
-// --- TEST ENDPOINTS FOR MICROCONTROLLER ---
-const dummyTradeResponse = (req, res, tradeType) => {
-    const { quantity, strike_price } = req.body;
-    console.log(`[TEST] Received ${tradeType} - Qty: ${quantity}, Strike: ${strike_price}`);
-    return res.status(200).json({
-        status: 'success',
-        message: `[TEST MODE] ${tradeType} order placed successfully`,
-        order_id: `test_${Math.floor(Math.random() * 100000000)}`,
-        symbol: `TEST_SYMBOL_${strike_price || '00000'}`,
-        quantity: quantity || 0
-    });
-};
-
-app.post('/test/buy/call', (req, res) => dummyTradeResponse(req, res, 'Buy Call'));
-app.post('/test/buy/put', (req, res) => dummyTradeResponse(req, res, 'Buy Put'));
-app.post('/test/sell/call', (req, res) => dummyTradeResponse(req, res, 'Sell Call'));
-app.post('/test/sell/put', (req, res) => dummyTradeResponse(req, res, 'Sell Put'));
-
-app.all('/test/device/ready', (req, res) => {
-    console.log("[TEST] Device Ready Ping Received");
-    return res.status(200).json({
-        status: 'success',
-        message: 'Device is connected and ready'
-    });
-});
-// ------------------------------------------
+app.post('/api/buy', (req, res) => executeTrade(req, res, 1));
+app.post('/api/sell', (req, res) => executeTrade(req, res, -1));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
