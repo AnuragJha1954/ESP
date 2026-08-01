@@ -10,7 +10,7 @@ export default function History() {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const res = await fetch('/api/user/trade-history', {
+        const res = await fetch(import.meta.env.VITE_API_URL + '/api/user/trade-history', {
           headers: { 'Authorization': `Bearer ${authToken}` }
         });
         const data = await res.json();

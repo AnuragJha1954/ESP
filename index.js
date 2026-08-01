@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 const sqlite3 = require('sqlite3');
 const { open } = require('sqlite');
 const { fyersModel } = require("fyers-api-v3");
@@ -13,6 +14,7 @@ const { sendApprovalEmail } = require('./emailService');
 
 const app = express();
 app.use(express.json());
+app.use(cors());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_super_secret_key_change_in_production';
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);

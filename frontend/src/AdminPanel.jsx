@@ -54,7 +54,7 @@ export default function AdminPanel() {
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/users', {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/admin/users', {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       const data = await res.json();
@@ -71,7 +71,7 @@ export default function AdminPanel() {
   const fetchGlobalTrades = async () => {
     setTradesLoading(true);
     try {
-      const res = await fetch('/api/admin/trade-history', {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/admin/trade-history', {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       const data = await res.json();
@@ -88,7 +88,7 @@ export default function AdminPanel() {
   const fetchWaitlist = async () => {
     setWaitlistLoading(true);
     try {
-      const res = await fetch('/api/admin/waitlist', {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/admin/waitlist', {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       const data = await res.json();
@@ -105,7 +105,7 @@ export default function AdminPanel() {
   const fetchUserDetails = async (userId) => {
     setDetailLoading(true);
     try {
-      const res = await fetch(`/api/admin/user/${userId}`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/user/${userId}`, {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       const data = await res.json();
@@ -121,7 +121,7 @@ export default function AdminPanel() {
 
   const handleApproveWaitlist = async (id) => {
     try {
-      const res = await fetch(`/api/admin/waitlist/${id}/approve`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/waitlist/${id}/approve`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
@@ -167,7 +167,7 @@ export default function AdminPanel() {
       return;
     }
     try {
-      const res = await fetch('/api/admin/users', {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
         body: JSON.stringify({ username: newUsername, email: newEmail, password: newPassword, role: 'user' })

@@ -10,7 +10,7 @@ export default function Trade() {
   const executeTrade = async (type) => {
     setStatus('processing');
     try {
-      const endpoint = '/api/buy'; // Using buy endpoint for both CE and PE test as requested previously
+      const endpoint = import.meta.env.VITE_API_URL + '/api/buy'; // Using buy endpoint for both CE and PE test as requested previously
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

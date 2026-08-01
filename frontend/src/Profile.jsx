@@ -27,7 +27,7 @@ export default function Profile() {
   useEffect(() => {
     const fetchCreds = async () => {
       try {
-        const res = await fetch('/api/user/credentials', {
+        const res = await fetch(import.meta.env.VITE_API_URL + '/api/user/credentials', {
           headers: { 'Authorization': `Bearer ${authToken}` }
         });
         const data = await res.json();
@@ -50,7 +50,7 @@ export default function Profile() {
     setLoading(true);
     setStatus({ type: '', msg: '' });
     try {
-      const res = await fetch('/api/user/credentials', {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/user/credentials', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

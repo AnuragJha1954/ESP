@@ -32,7 +32,7 @@ export function StateProvider({ children }) {
   const fetchPreferences = async () => {
     if (!authToken) return;
     try {
-      const res = await fetch('/api/user/preferences', {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/user/preferences', {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
       const data = await res.json();
@@ -55,7 +55,7 @@ export function StateProvider({ children }) {
   const savePreferences = async (newBroker, newIndex, newExpiry) => {
     if (!authToken) return;
     try {
-      await fetch('/api/user/preferences', {
+      await fetch(import.meta.env.VITE_API_URL + '/api/user/preferences', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
