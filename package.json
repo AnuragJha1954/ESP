@@ -4,6 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "build": "cd frontend && npm install && npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -12,11 +13,17 @@
   "description": "",
   "dependencies": {
     "axios": "^1.18.1",
+    "bcryptjs": "^3.0.3",
     "crypto": "^1.0.1",
+    "dhanhq": "^1.0.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "fyers-api-v3": "^2.0.0",
+    "google-auth-library": "^10.9.1",
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^9.0.3",
     "otplib": "^13.4.1",
+    "speakeasy": "^2.0.0",
     "sqlite": "^5.1.1",
     "sqlite3": "^6.0.1"
   }

@@ -5,45 +5,368 @@ const { open } = require('sqlite');
 const { fyersModel } = require("fyers-api-v3");
 const axios = require('axios');
 const crypto = require('crypto');
-
-// In-memory cache to eliminate Database latency on hot trading requests
-let cachedAccessToken = null;
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const { OAuth2Client } = require('google-auth-library');
+const { generateDhanToken, executeDhanTrade } = require('./dhanApi');
+const { sendApprovalEmail } = require('./emailService');
 
 const app = express();
 app.use(express.json());
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_super_secret_key_change_in_production';
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 let db;
 
 const initDB = async () => {
     try {
         db = await open({
-            filename: './fyers_auth.sqlite',
+            filename: './esp_database.sqlite',
             driver: sqlite3.Database
         });
 
         await db.exec(`
-            CREATE TABLE IF NOT EXISTS fyers_auth (
-                id INTEGER PRIMARY KEY,
-                access_token TEXT NOT NULL,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                password_hash TEXT,
+                google_id TEXT UNIQUE,
+                email TEXT UNIQUE,
+                role TEXT DEFAULT 'user',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id INTEGER PRIMARY KEY,
+                selected_broker TEXT DEFAULT 'Fyers',
+                selected_index TEXT DEFAULT 'NIFTY 50',
+                selected_expiry TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS broker_credentials (
+                user_id INTEGER PRIMARY KEY,
+                fyers_id TEXT,
+                fyers_totp_secret TEXT,
+                fyers_pin TEXT,
+                fyers_app_id TEXT,
+                fyers_secret_key TEXT,
+                fyers_access_token TEXT,
+                dhan_client_id TEXT,
+                dhan_password TEXT,
+                dhan_totp_secret TEXT,
+                dhan_api_key TEXT,
+                dhan_api_secret TEXT,
+                dhan_access_token TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS trade_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                broker TEXT,
+                symbol TEXT,
+                type TEXT,
+                side INTEGER,
+                quantity INTEGER,
+                message TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS waitlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                email TEXT UNIQUE,
+                status TEXT DEFAULT 'pending',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
         `);
-        console.log("Database 'fyers_auth.sqlite' initialized successfully.");
+
+        // Seed default admin
+        const adminExists = await db.get(`SELECT id FROM users WHERE username = 'admin'`);
+        if (!adminExists) {
+            const hash = await bcrypt.hash('admin', 10);
+            await db.run(`INSERT INTO users (username, password_hash, role) VALUES ('admin', ?, 'admin')`, hash);
+            console.log("Default admin account created (admin/admin).");
+        }
+
+        console.log("Database initialized successfully.");
     } catch (err) {
         console.error("Error initializing SQLite database:", err);
     }
 };
 initDB();
 
-// Function to generate the SHA256 hash required by Fyers API v3
+// ------------------------------------------------------------------
+// MIDDLEWARE
+// ------------------------------------------------------------------
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) return res.status(401).json({ status: 'error', message: 'Unauthorized' });
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) return res.status(403).json({ status: 'error', message: 'Forbidden' });
+        req.user = user;
+        next();
+    });
+};
+
+const authenticateAdmin = (req, res, next) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ status: 'error', message: 'Admin access required' });
+    }
+    next();
+};
+
+// ------------------------------------------------------------------
+// AUTH API
+// ------------------------------------------------------------------
+app.post('/api/auth/login', async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        const user = await db.get(`SELECT * FROM users WHERE username = ?`, [username]);
+        if (!user || !user.password_hash) {
+            return res.status(401).json({ status: 'error', message: 'Invalid credentials' });
+        }
+        
+        const validPassword = await bcrypt.compare(password, user.password_hash);
+        if (!validPassword) {
+            return res.status(401).json({ status: 'error', message: 'Invalid credentials' });
+        }
+
+        const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        res.json({ status: 'success', token, user: { id: user.id, username: user.username, role: user.role } });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.post('/api/auth/google', async (req, res) => {
+    const { credential } = req.body;
+    try {
+        const ticket = await googleClient.verifyIdToken({
+            idToken: credential,
+            audience: process.env.GOOGLE_CLIENT_ID,
+        });
+        const payload = ticket.getPayload();
+        
+        // Check if user exists by email
+        let user = await db.get(`SELECT * FROM users WHERE email = ?`, [payload.email]);
+        
+        if (!user) {
+            return res.status(401).json({ status: 'error', message: 'Account not found. This is an invite-only platform.' });
+        }
+
+        // Update google_id if not set
+        if (!user.google_id) {
+            await db.run(`UPDATE users SET google_id = ? WHERE id = ?`, [payload.sub, user.id]);
+        }
+
+        const token = jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        res.json({ status: 'success', token, user: { id: user.id, username: user.username, email: user.email, role: user.role } });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: 'Google Authentication Failed', error: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
+// WAITLIST API
+// ------------------------------------------------------------------
+app.post('/api/waitlist/apply', async (req, res) => {
+    const { name, email } = req.body;
+    try {
+        await db.run(`INSERT INTO waitlist (name, email) VALUES (?, ?)`, [name, email]);
+        res.json({ status: 'success', message: 'Applied to waitlist successfully.' });
+    } catch (err) {
+        if (err.message.includes('UNIQUE')) {
+            return res.status(400).json({ status: 'error', message: 'Email already on waitlist.' });
+        }
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
+// ADMIN API
+// ------------------------------------------------------------------
+app.get('/api/admin/users', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        const users = await db.all(`SELECT id, username, email, google_id, role, created_at FROM users`);
+        res.json({ status: 'success', data: users });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.post('/api/admin/users', authenticateToken, authenticateAdmin, async (req, res) => {
+    const { username, password, email, role } = req.body;
+    try {
+        const hash = password ? await bcrypt.hash(password, 10) : null;
+        const result = await db.run(`INSERT INTO users (username, password_hash, email, role) VALUES (?, ?, ?, ?)`, 
+            [username || null, hash, email || null, role || 'user']);
+        res.json({ status: 'success', message: 'User created', userId: result.lastID });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.get('/api/admin/user/:userId', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const user = await db.get(`SELECT id, username, email, google_id, role, created_at FROM users WHERE id = ?`, [userId]);
+        if (!user) {
+            return res.status(404).json({ status: 'error', message: 'User not found' });
+        }
+        const preferences = await db.get(`SELECT selected_broker, selected_index, selected_expiry FROM user_preferences WHERE user_id = ?`, [userId]);
+        const broker_credentials = await db.get(`SELECT * FROM broker_credentials WHERE user_id = ?`, [userId]);
+
+        res.json({
+            status: 'success',
+            data: {
+                user,
+                preferences: preferences || null,
+                broker_credentials: broker_credentials || null
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.get('/api/admin/waitlist', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        const entries = await db.all(`SELECT * FROM waitlist ORDER BY created_at DESC`);
+        res.json({ status: 'success', data: entries });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.post('/api/admin/waitlist/:id/approve', authenticateToken, authenticateAdmin, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const entry = await db.get(`SELECT * FROM waitlist WHERE id = ?`, [id]);
+        if (!entry) return res.status(404).json({ status: 'error', message: 'Waitlist entry not found' });
+        if (entry.status !== 'pending') return res.status(400).json({ status: 'error', message: 'Already processed' });
+
+        const password = crypto.randomBytes(4).toString('hex');
+        const hash = await bcrypt.hash(password, 10);
+        let username = entry.email.split('@')[0];
+        
+        try {
+            await db.run(`INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)`, [username, hash, entry.email]);
+        } catch (insertErr) {
+            username = username + '_' + crypto.randomBytes(2).toString('hex');
+            await db.run(`INSERT INTO users (username, password_hash, email) VALUES (?, ?, ?)`, [username, hash, entry.email]);
+        }
+        
+        await db.run(`UPDATE waitlist SET status = 'approved' WHERE id = ?`, [id]);
+        
+        // Send Onboarding Email
+        await sendApprovalEmail(entry.email, entry.name, username, password);
+        
+        res.json({ status: 'success', message: 'User approved and email sent', credentials: { username, password } });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
+// USER PREFERENCES API
+// ------------------------------------------------------------------
+app.get('/api/user/preferences', authenticateToken, async (req, res) => {
+    try {
+        const prefs = await db.get(`SELECT * FROM user_preferences WHERE user_id = ?`, [req.user.id]);
+        res.json({ status: 'success', data: prefs || {} });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.post('/api/user/preferences', authenticateToken, async (req, res) => {
+    const { selected_broker, selected_index, selected_expiry } = req.body;
+    try {
+        await db.run(`
+            INSERT INTO user_preferences (user_id, selected_broker, selected_index, selected_expiry)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET 
+            selected_broker = excluded.selected_broker,
+            selected_index = excluded.selected_index,
+            selected_expiry = excluded.selected_expiry;
+        `, [req.user.id, selected_broker, selected_index, selected_expiry]);
+        res.json({ status: 'success' });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// Broker Credentials
+app.get(['/api/user/credentials', '/api/user/fyers-credentials'], authenticateToken, async (req, res) => {
+    try {
+        const creds = await db.get(`SELECT * FROM broker_credentials WHERE user_id = ?`, [req.user.id]);
+        res.json({ status: 'success', data: creds || {} });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.post(['/api/user/credentials', '/api/user/fyers-credentials'], authenticateToken, async (req, res) => {
+    let { 
+        fyers_id, fyers_totp_secret, fyers_pin, fyers_app_id, fyers_secret_key,
+        dhan_client_id, dhan_password, dhan_totp_secret, dhan_api_key, dhan_api_secret, dhan_access_token
+    } = req.body;
+    
+    // Trim to prevent copy-paste whitespace issues
+    fyers_id = fyers_id?.trim();
+    fyers_totp_secret = fyers_totp_secret?.trim();
+    fyers_pin = fyers_pin?.trim();
+    fyers_app_id = fyers_app_id?.trim();
+    fyers_secret_key = fyers_secret_key?.trim();
+    dhan_client_id = dhan_client_id?.trim();
+    dhan_password = dhan_password?.trim();
+    dhan_totp_secret = dhan_totp_secret?.trim();
+    dhan_api_key = dhan_api_key?.trim();
+    dhan_api_secret = dhan_api_secret?.trim();
+    dhan_access_token = dhan_access_token?.trim();
+
+    try {
+        await db.run(`
+            INSERT INTO broker_credentials (
+                user_id, fyers_id, fyers_totp_secret, fyers_pin, fyers_app_id, fyers_secret_key,
+                dhan_client_id, dhan_password, dhan_totp_secret, dhan_api_key, dhan_api_secret, dhan_access_token
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET 
+            fyers_id = COALESCE(excluded.fyers_id, broker_credentials.fyers_id),
+            fyers_totp_secret = COALESCE(excluded.fyers_totp_secret, broker_credentials.fyers_totp_secret),
+            fyers_pin = COALESCE(excluded.fyers_pin, broker_credentials.fyers_pin),
+            fyers_app_id = COALESCE(excluded.fyers_app_id, broker_credentials.fyers_app_id),
+            fyers_secret_key = COALESCE(excluded.fyers_secret_key, broker_credentials.fyers_secret_key),
+            dhan_client_id = COALESCE(excluded.dhan_client_id, broker_credentials.dhan_client_id),
+            dhan_password = COALESCE(excluded.dhan_password, broker_credentials.dhan_password),
+            dhan_totp_secret = COALESCE(excluded.dhan_totp_secret, broker_credentials.dhan_totp_secret),
+            dhan_api_key = COALESCE(excluded.dhan_api_key, broker_credentials.dhan_api_key),
+            dhan_api_secret = COALESCE(excluded.dhan_api_secret, broker_credentials.dhan_api_secret),
+            dhan_access_token = COALESCE(excluded.dhan_access_token, broker_credentials.dhan_access_token),
+            updated_at = CURRENT_TIMESTAMP;
+        `, [
+            req.user.id, fyers_id, fyers_totp_secret, fyers_pin, fyers_app_id, fyers_secret_key,
+            dhan_client_id, dhan_password, dhan_totp_secret, dhan_api_key, dhan_api_secret, dhan_access_token
+        ]);
+        res.json({ status: 'success', message: 'Credentials saved' });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
+// FYERS TRADING LOGIC
+// ------------------------------------------------------------------
 function generateAppIdHash(clientId, secretKey) {
     const hash = crypto.createHash('sha256');
-    // Fyers v3 format requires AppID + SecretKey
     hash.update(`${clientId}:${secretKey}`);
     return hash.digest('hex');
 }
 
-// Native Zero-Dependency TOTP Generator
 function base32tohex(base32) {
     let base32chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     let bits = "";
@@ -73,239 +396,250 @@ function generateTOTP(secret) {
     hmac.update(time);
     const result = hmac.digest();
     const offset = result[result.length - 1] & 0xf;
-    const otp = (
-        ((result[offset] & 0x7f) << 24) |
-        ((result[offset + 1] & 0xff) << 16) |
-        ((result[offset + 2] & 0xff) << 8) |
-        (result[offset + 3] & 0xff)
-    ) % 1000000;
+    const otp = (((result[offset] & 0x7f) << 24) | ((result[offset + 1] & 0xff) << 16) | ((result[offset + 2] & 0xff) << 8) | (result[offset + 3] & 0xff)) % 1000000;
     return otp.toString().padStart(6, '0');
 }
 
-// Auto-login endpoint to bypass the browser
-app.all('/api/fyers/generate-access-token', async (req, res) => {
+const generateAccessTokenHandler = async (req, res) => {
     try {
-        const fy_id = "FAJ97539";
-        const totp_secret = "C3AXMFE42T3PKWJB3H536RBDPW2SYPK3";
-        const pin = "8259";
-        const appId = "0LJX4AMOQB-200";
-        const secretKey = "mouPEyXd92TrnWs6";
-        const redirectUri = "https://trade.fyers.in/api-login/redirect-uri/index.html";
+        const userId = req.user?.id || req.params.userId;
+        const prefs = await db.get(`SELECT selected_broker FROM user_preferences WHERE user_id = ?`, [userId]);
+        const broker = prefs ? prefs.selected_broker : 'Fyers';
 
-        if (!fy_id || !totp_secret || !pin || !appId || !secretKey) {
-            return res.status(500).json({ 
-                status: 'error', 
-                message: 'Missing Fyers credentials. Please set FYERS_ID, FYERS_TOTP_SECRET, FYERS_PIN, FYERS_APP_ID, and FYERS_SECRET_KEY in Vercel Environment Variables.' 
-            });
-        }
-        
-        const baseAppId = appId.includes('-') ? appId.split('-')[0] : appId;
-        const appIdHash = generateAppIdHash(appId, secretKey);
-
-        console.log("-----------------------------------------");
-        console.log("Step 1: Sending Login OTP Request...");
-        const payload1 = {
-            fy_id: Buffer.from(fy_id).toString('base64'),
-            app_id: "2" // App id 2 is usually required for vagator authentication
-        };
-        console.log("Req Body:", JSON.stringify(payload1));
-        const sendOtpResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/send_login_otp_v2', payload1);
-        console.log("Response:", JSON.stringify(sendOtpResponse.data));
-        
-        if (sendOtpResponse.data.code !== 200 && sendOtpResponse.data.code !== 1043 && sendOtpResponse.data.s !== 'ok') {
-            throw new Error(`Failed to send OTP: ${JSON.stringify(sendOtpResponse.data)}`);
-        }
-        
-        const requestKey = sendOtpResponse.data.request_key;
-
-        console.log("-----------------------------------------");
-        console.log("Step 2: Generating TOTP and Verifying...");
-        const totp = generateTOTP(totp_secret);
-        
-        console.log("=========================================");
-        console.log("GENERATED 6-DIGIT TOTP CODE:", totp);
-        console.log("=========================================");
-        
-        const payload2 = {
-            request_key: requestKey,
-            otp: totp
-        };
-        console.log("Req Body:", JSON.stringify(payload2));
-        const verifyOtpResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/verify_otp', payload2);
-        console.log("Response:", JSON.stringify(verifyOtpResponse.data));
-        
-        if (verifyOtpResponse.data.code !== 200 && verifyOtpResponse.data.s !== 'ok') {
-            throw new Error(`Failed to verify TOTP: ${JSON.stringify(verifyOtpResponse.data)}`);
-        }
-        
-        const requestKey2 = verifyOtpResponse.data.request_key;
-
-        console.log("-----------------------------------------");
-        console.log("Step 3: Verifying PIN...");
-        const payload3 = {
-            request_key: requestKey2,
-            identity_type: "pin",
-            identifier: Buffer.from(pin).toString('base64')
-        };
-        console.log("Req Body:", JSON.stringify(payload3));
-        const verifyPinResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/verify_pin_v2', payload3);
-        console.log("Response:", JSON.stringify(verifyPinResponse.data));
-        
-        if (verifyPinResponse.data.code !== 200 && verifyPinResponse.data.s !== 'ok') {
-            throw new Error(`Failed to verify PIN: ${JSON.stringify(verifyPinResponse.data)}`);
-        }
-
-        const accessTokenVagator = verifyPinResponse.data.data.access_token;
-
-        console.log("-----------------------------------------");
-        console.log("Step 4: Getting Auth Code...");
-        const payload4 = {
-            fyers_id: fy_id,
-            app_id: appId.includes('-') ? appId.split('-')[0] : appId,
-            redirect_uri: redirectUri,
-            appType: appId.includes('-') ? appId.split('-')[1] : "100",
-            code_challenge: "",
-            state: crypto.randomBytes(8).toString('hex'),
-            scope: "",
-            nonce: "",
-            response_type: "code",
-            create_cookie: true
-        };
-        console.log("Req Body:", JSON.stringify(payload4));
-        const authCodeResponse = await axios.post('https://api-t1.fyers.in/api/v3/token', payload4, {
-            headers: {
-                'Authorization': `Bearer ${accessTokenVagator}`
-            },
-            validateStatus: function (status) {
-                return status >= 200 && status < 400; // Accept 308 Redirect as success
+        if (broker === 'Dhan') {
+            try {
+                const token = await generateDhanToken(db, userId);
+                return res.status(200).json({ status: 'success', message: 'Dhan Access Token generated successfully.', token });
+            } catch (dhanError) {
+                return res.status(500).json({ status: 'error', message: 'Dhan Auto-Login failed', error: dhanError.message });
             }
-        });
-        console.log("Response:", JSON.stringify(authCodeResponse.data));
-        
-        if (authCodeResponse.data.s !== 'ok') {
-            throw new Error(`Failed to get auth code: ${JSON.stringify(authCodeResponse.data)}`);
-        }
-        
-        // Sometimes the API returns an explicit auth_code, sometimes we have to parse the URL redirect.
-        // Fyers api v3 returns a url field which contains the auth_code
-        const urlParams = new URLSearchParams(authCodeResponse.data.Url.split('?')[1]);
-        const authCode = urlParams.get('auth_code');
-
-        console.log("-----------------------------------------");
-        console.log("Step 5: Exchanging Auth Code for Access Token...");
-        const payload5 = {
-            grant_type: "authorization_code",
-            appIdHash: appIdHash,
-            code: authCode
-        };
-        console.log("Req Params:", JSON.stringify(payload5));
-        const tokenReq = await axios.post('https://api-t1.fyers.in/api/v3/validate-authcode', payload5);
-        const tokenResponse = tokenReq.data;
-        console.log("Response:", JSON.stringify(tokenResponse));
-
-        if (tokenResponse.s === 'ok' || tokenResponse.access_token) {
-            const finalAccessToken = tokenResponse.access_token;
-
-            console.log("Step 6: Saving to Local SQLite Database...");
-            await db.run(`
-                INSERT INTO fyers_auth (id, access_token, updated_at)
-                VALUES (1, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT (id) DO UPDATE SET 
-                access_token = excluded.access_token,
-                updated_at = CURRENT_TIMESTAMP;
-            `, [finalAccessToken]);
-
-            cachedAccessToken = finalAccessToken; // Update cache immediately
-
-            return res.status(200).json({
-                status: 'success',
-                message: 'Login successful and local DB updated with new access token.'
-            });
-        } else {
-            throw new Error(`Failed to generate final access token: ${JSON.stringify(tokenResponse)}`);
         }
 
+        // Fyers Flow
+        const creds = await db.get(`SELECT * FROM broker_credentials WHERE user_id = ?`, [userId]);
+        if (!creds || !creds.fyers_id || !creds.fyers_totp_secret || !creds.fyers_pin || !creds.fyers_app_id || !creds.fyers_secret_key) {
+            return res.status(400).json({ status: 'error', message: 'Missing Fyers credentials for this user. Please configure them in your profile.' });
+        }
+
+        let { fyers_id, fyers_totp_secret, fyers_pin, fyers_app_id, fyers_secret_key } = creds;
+        
+        // Trim all credentials to prevent copy-paste whitespace errors
+        fyers_id = fyers_id?.trim();
+        fyers_totp_secret = fyers_totp_secret?.trim();
+        fyers_pin = fyers_pin?.trim();
+        fyers_app_id = fyers_app_id?.trim();
+        fyers_secret_key = fyers_secret_key?.trim();
+
+        const redirectUri = "https://trade.fyers.in/api-login/redirect-uri/index.html";
+        const appIdHash = generateAppIdHash(fyers_app_id, fyers_secret_key);
+
+        let attempt = 1;
+        const maxAttempts = 3;
+        let lastError = null;
+
+        while (attempt <= maxAttempts) {
+            try {
+                console.log(`[Fyers Auth] Attempt ${attempt} for user ${userId}`);
+                
+                const payload1 = { fy_id: Buffer.from(fyers_id).toString('base64'), app_id: "2" };
+                const sendOtpResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/send_login_otp_v2', payload1, { timeout: 10000 });
+                if (sendOtpResponse.data.code !== 200 && sendOtpResponse.data.code !== 1043 && sendOtpResponse.data.s !== 'ok') {
+                    throw new Error(`Failed to send OTP: ${JSON.stringify(sendOtpResponse.data)}`);
+                }
+                const requestKey = sendOtpResponse.data.request_key;
+
+                // Generating TOTP right before using it to ensure it's as fresh as possible
+                const totp = generateTOTP(fyers_totp_secret);
+                const payload2 = { request_key: requestKey, otp: totp };
+                const verifyOtpResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/verify_otp', payload2, { timeout: 10000 });
+                if (verifyOtpResponse.data.code !== 200 && verifyOtpResponse.data.s !== 'ok') {
+                    throw new Error(`Failed to verify TOTP: ${JSON.stringify(verifyOtpResponse.data)}`);
+                }
+                const requestKey2 = verifyOtpResponse.data.request_key;
+
+                const payload3 = { request_key: requestKey2, identity_type: "pin", identifier: Buffer.from(fyers_pin).toString('base64') };
+                const verifyPinResponse = await axios.post('https://api-t2.fyers.in/vagator/v2/verify_pin_v2', payload3, { timeout: 10000 });
+                if (verifyPinResponse.data.code !== 200 && verifyPinResponse.data.s !== 'ok') {
+                    throw new Error(`Failed to verify PIN: ${JSON.stringify(verifyPinResponse.data)}`);
+                }
+                const accessTokenVagator = verifyPinResponse.data.data.access_token;
+
+                const payload4 = {
+                    fyers_id: fyers_id,
+                    app_id: fyers_app_id.includes('-') ? fyers_app_id.split('-')[0] : fyers_app_id,
+                    redirect_uri: redirectUri,
+                    appType: fyers_app_id.includes('-') ? fyers_app_id.split('-')[1] : "100",
+                    code_challenge: "",
+                    state: crypto.randomBytes(8).toString('hex'),
+                    scope: "",
+                    nonce: "",
+                    response_type: "code",
+                    create_cookie: true
+                };
+                const authCodeResponse = await axios.post('https://api-t1.fyers.in/api/v3/token', payload4, {
+                    headers: { 'Authorization': `Bearer ${accessTokenVagator}` },
+                    validateStatus: (status) => status >= 200 && status < 400,
+                    timeout: 10000
+                });
+                
+                if (authCodeResponse.data.s !== 'ok') {
+                    throw new Error(`Failed to get auth code: ${JSON.stringify(authCodeResponse.data)}`);
+                }
+                
+                const urlParams = new URLSearchParams(authCodeResponse.data.Url.split('?')[1]);
+                const authCode = urlParams.get('auth_code');
+
+                const payload5 = { grant_type: "authorization_code", appIdHash: appIdHash, code: authCode };
+                const tokenReq = await axios.post('https://api-t1.fyers.in/api/v3/validate-authcode', payload5, { timeout: 10000 });
+                const tokenResponse = tokenReq.data;
+
+                if (tokenResponse.s === 'ok' || tokenResponse.access_token) {
+                    await db.run(`UPDATE broker_credentials SET fyers_access_token = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`, [tokenResponse.access_token, userId]);
+                    return res.status(200).json({ status: 'success', message: 'Fyers Access Token generated successfully.' });
+                } else {
+                    throw new Error(`Failed to generate final access token: ${JSON.stringify(tokenResponse)}`);
+                }
+
+            } catch (error) {
+                lastError = error.response ? error.response.data : (error.message || String(error));
+                console.error(`[Fyers Auth] Attempt ${attempt} failed:`, JSON.stringify(lastError));
+                
+                if (attempt < maxAttempts) {
+                    // Wait for a few seconds before retrying (2s, 4s, etc.)
+                    // This is especially useful if TOTP was out of sync or rate limit triggered
+                    const waitTime = attempt * 2000;
+                    console.log(`[Fyers Auth] Waiting ${waitTime}ms before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                }
+                attempt++;
+            }
+        }
+
+        // If we reach here, all attempts failed
+        console.error("[Fyers Auth] All attempts exhausted.");
+        return res.status(500).json({ status: 'error', message: 'Fyers authentication failed after multiple attempts', error: lastError });
     } catch (error) {
-        const errorDetail = error.response ? error.response.data : (error.message || String(error));
-        console.error("Auto-Auth Error:", JSON.stringify(errorDetail));
-        return res.status(500).json({ 
-            status: 'error', 
-            message: 'Internal server error during auto-authentication', 
-            error: errorDetail
-        });
+        const errorDetail = error.message || String(error);
+        return res.status(500).json({ status: 'error', message: 'Internal server error during auto-authentication', error: errorDetail });
     }
-});
+};
 
 const executeTrade = async (req, res, side) => {
     try {
-        const { quantity, strike, type, index, expiry } = req.body;
+        const userId = req.user?.id || req.params.userId;
+        const { quantity, strike, type, symbol } = req.body;
         
-        if (!quantity || !strike || !type) {
-            return res.status(400).json({ status: 'error', message: 'Missing quantity, strike, or type (CE/PE)' });
-        }
-        
-        const optionType = type.toUpperCase();
-        if (optionType !== 'CE' && optionType !== 'PE') {
-            return res.status(400).json({ status: 'error', message: 'type must be CE or PE' });
+        if (!quantity || !strike || !type || !symbol) {
+            return res.status(400).json({ status: 'error', message: 'Missing quantity, strike, symbol, or type' });
         }
 
-        // Fetch access token from SQLite DB
-        const row = await db.get(`SELECT access_token FROM fyers_auth WHERE id = 1 LIMIT 1`);
-        if (!row || !row.access_token) {
-            return res.status(401).json({ status: 'error', message: 'No access token found in database. Run auto-auth first.' });
-        }
+        const prefs = await db.get(`SELECT selected_broker FROM user_preferences WHERE user_id = ?`, [userId]);
+        const broker = prefs ? prefs.selected_broker : 'Fyers';
+
+        let orderResponse;
         
-        const accessToken = row.access_token;
-        const appId = "0LJX4AMOQB-200";
+        if (broker === 'Dhan') {
+            orderResponse = await executeDhanTrade(db, userId, { quantity, strike, type, symbol, side });
+        } else {
+            // Fyers Logic
+            const creds = await db.get(`SELECT fyers_access_token, fyers_app_id FROM broker_credentials WHERE user_id = ?`, [userId]);
+            if (!creds || !creds.fyers_access_token) {
+                throw new Error('No Fyers access token found. Please run the generate token flow first.');
+            }
 
-        // Setup Fyers SDK
-        const fyers = new fyersModel();
-        fyers.setAppId(appId);
-        fyers.setRedirectUrl("https://trade.fyers.in/api-login/redirect-uri/index.html");
-        fyers.setAccessToken(accessToken);
+            const fyers = new fyersModel();
+            fyers.setAppId(creds.fyers_app_id);
+            fyers.setRedirectUrl("https://trade.fyers.in/api-login/redirect-uri/index.html");
+            fyers.setAccessToken(creds.fyers_access_token);
 
-        // Determine Underlying and Expiry dynamically
-        const underlying = (index && index.includes('BANKNIFTY')) ? 'BANKNIFTY' : 'NIFTY';
-        const expiryCode = expiry || '26AUG'; // Fallback to August if not provided
+            const optionType = type.toUpperCase();
+            const tradingSymbol = `NSE:${symbol}${strike}${optionType}`;
 
-        // Construct dynamic symbol
-        const tradingSymbol = `NSE:${underlying}${expiryCode}${strike}${optionType}`;
+            orderResponse = await fyers.place_order({
+                "symbol": tradingSymbol,
+                "qty": Number(quantity),
+                "type": 2, // Market
+                "side": side, 
+                "productType": "INTRADAY",
+                "limitPrice": 0,
+                "stopPrice": 0,
+                "validity": "DAY",
+                "disclosedQty": 0,
+                "offlineOrder": false,
+                "stopLoss": 0,
+                "takeProfit": 0,
+                "orderTag": "InfirowAPI",
+                "isSliceOrder": false
+            });
 
-        console.log(`Executing ${side === 1 ? 'BUY' : 'SELL'} -> ${tradingSymbol} | Qty: ${quantity}`);
+            if (orderResponse.s !== "ok") {
+                throw new Error(`Fyers Order Failed: ${JSON.stringify(orderResponse)}`);
+            }
+        }
 
-        // Place the live order
-        const orderResponse = await fyers.place_order({
-            "symbol": tradingSymbol,
-            "qty": Number(quantity),
-            "type": 2, // 2 = Market order
-            "side": side, // 1 = Buy, -1 = Sell
-            "productType": "INTRADAY",
-            "limitPrice": 0,
-            "stopPrice": 0,
-            "validity": "DAY",
-            "disclosedQty": 0,
-            "offlineOrder": false,
-            "stopLoss": 0,
-            "takeProfit": 0,
-            "orderTag": "APIOrder",
-            "isSliceOrder": false
-        });
+        // Save trade to history
+        await db.run(`
+            INSERT INTO trade_history (user_id, broker, symbol, type, side, quantity, message) 
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [userId, broker, symbol, type, side, quantity, 'Success']);
 
-        return res.status(200).json({
-            status: "success",
-            message: "Order placed",
-            symbol: tradingSymbol,
-            fyers_response: orderResponse
-        });
-
+        return res.status(200).json({ status: "success", message: "Order placed", broker: broker, response: orderResponse });
     } catch (error) {
         console.log(`FAILURE: Execute Trade - Error: ${error.message}`);
+        
+        // Log failed trade to history
+        const userId = req.user?.id || req.params.userId;
+        const prefs = await db.get(`SELECT selected_broker FROM user_preferences WHERE user_id = ?`, [userId]);
+        const broker = prefs ? prefs.selected_broker : 'Fyers';
+        
+        try {
+            await db.run(`
+                INSERT INTO trade_history (user_id, broker, symbol, type, side, quantity, message) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `, [userId, broker, req.body?.symbol || 'Unknown', req.body?.type || 'Unknown', side, req.body?.quantity || 0, `Failed: ${error.message}`]);
+        } catch (dbErr) {
+            console.error("Failed to log failed trade to DB:", dbErr);
+        }
+
         return res.status(500).json({ status: 'error', message: 'Internal server error', error: error.message });
     }
 };
 
-app.post('/api/buy', (req, res) => executeTrade(req, res, 1));
-app.post('/api/sell', (req, res) => executeTrade(req, res, -1));
+app.get('/api/user/trade-history', authenticateToken, async (req, res) => {
+    try {
+        const history = await db.all(`SELECT * FROM trade_history WHERE user_id = ? ORDER BY created_at DESC LIMIT 100`, [req.user.id]);
+        res.json({ status: 'success', data: history });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.get('/api/admin/trade-history', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        const history = await db.all(`
+            SELECT th.*, u.username 
+            FROM trade_history th 
+            JOIN users u ON th.user_id = u.id 
+            ORDER BY th.created_at DESC LIMIT 500
+        `);
+        res.json({ status: 'success', data: history });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.post('/api/fyers/generate-access-token', authenticateToken, generateAccessTokenHandler); // Kept for backwards compatibility
+app.post('/api/hardware/:userId/fyers/generate-access-token', generateAccessTokenHandler); // Kept for backwards compatibility
+app.post('/api/broker/generate-access-token', authenticateToken, generateAccessTokenHandler);
+app.post('/api/buy', authenticateToken, (req, res) => executeTrade(req, res, 1));
+app.post('/api/sell', authenticateToken, (req, res) => executeTrade(req, res, -1));
+
+// ------------------------------------------------------------------
+// HARDWARE ENDPOINTS (No JWT Required)
+// ------------------------------------------------------------------
+app.post('/api/hardware/:userId/broker/generate-access-token', generateAccessTokenHandler);
+app.post('/api/hardware/:userId/buy', (req, res) => executeTrade(req, res, 1));
+app.post('/api/hardware/:userId/sell', (req, res) => executeTrade(req, res, -1));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

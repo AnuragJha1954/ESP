@@ -4,7 +4,7 @@ import NavBar from './NavBar';
 import { useAppState } from './StateContext';
 
 export default function Trade() {
-  const { index, strike, setStrike, qty, setQty, expiry } = useAppState();
+  const { index, strike, setStrike, qty, setQty } = useAppState();
   const [status, setStatus] = useState(null);
 
   const executeTrade = async (type) => {
@@ -14,7 +14,7 @@ export default function Trade() {
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ quantity: qty, strike, type, index, expiry })
+        body: JSON.stringify({ quantity: qty, strike, type })
       });
       const data = await res.json();
       if (data.status === 'success') {

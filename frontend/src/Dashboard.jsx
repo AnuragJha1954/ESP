@@ -1,3 +1,4 @@
+import { useMemo, useEffect } from 'react';
 import { useAppState } from './StateContext';
 import NavBar from './NavBar';
 import CustomSelect from './CustomSelect';
@@ -7,19 +8,62 @@ export default function Dashboard() {
 
   const brokerOptions = [
     { label: 'Fyers', value: 'Fyers' },
-    { label: 'Zerodha (Coming Soon)', value: 'Zerodha', disabled: true }
+    { label: 'Dhan', value: 'Dhan' }
   ];
 
   const indexOptions = [
     { label: 'NIFTY 50', value: 'NIFTY' },
-    { label: 'BANKNIFTY', value: 'BANKNIFTY' }
+    { label: 'BANK NIFTY', value: 'BANKNIFTY' },
+    { label: 'FIN NIFTY', value: 'FINNIFTY' },
+    { label: 'MIDCAP NIFTY', value: 'MIDCPNIFTY' },
+    { label: 'SENSEX (BSE)', value: 'SENSEX' },
+    { label: 'BANKEX (BSE)', value: 'BANKEX' }
   ];
 
-  const expiryOptions = [
-    { label: '26 JUL (Current)', value: '26JUL26' },
-    { label: '02 AUG', value: '02AUG26' },
-    { label: '09 AUG', value: '09AUG26' }
-  ];
+  const getNextExpiries = (indexStr) => {
+    // 0: Sun, 1: Mon, 2: Tue, 3: Wed, 4: Thu, 5: Fri, 6: Sat
+    const expiryDays = {
+      'NIFTY': 4,
+      'BANKNIFTY': 3,
+      'FINNIFTY': 2,
+      'MIDCPNIFTY': 1,
+      'SENSEX': 5,
+      'BANKEX': 1
+    };
+    const targetDay = expiryDays[indexStr] || 4; 
+    const options = [];
+    const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    
+    let d = new Date();
+    // If today is past 3:30 PM on expiry day, technically it's expired, but for simplicity we just find the next target day.
+    // If today is target day, it will include today.
+    while (d.getDay() !== targetDay) {
+      d.setDate(d.getDate() + 1);
+    }
+
+    for (let i = 0; i < 4; i++) {
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mmm = months[d.getMonth()];
+      const yy = String(d.getFullYear()).slice(-2);
+      const yyyy = d.getFullYear();
+      
+      const labelStr = `${dd} ${mmm} ${yyyy}${i === 0 ? ' (Current)' : i === 3 ? ' (Monthly)' : ''}`;
+      const valueStr = `${dd}${mmm}${yy}`;
+      options.push({ label: labelStr, value: valueStr });
+      
+      d.setDate(d.getDate() + 7);
+    }
+    return options;
+  };
+
+  const expiryOptions = useMemo(() => getNextExpiries(index), [index]);
+
+  // If autoExpiry is enabled and index changes, auto-update the expiry to the newly calculated current week
+  useEffect(() => {
+    if (autoExpiry && expiryOptions.length > 0) {
+      setExpiry(expiryOptions[0].value);
+    }
+  }, [index, autoExpiry, expiryOptions, setExpiry]);
 
   return (
     <div className="app-container" style={{ padding: '2rem 1.5rem' }}>
@@ -60,12 +104,15 @@ export default function Dashboard() {
                <CustomSelect value={index} onChange={setIndex} options={indexOptions} />
              </div>
 
-             {/* Expiry Selector */}
+              {/* Expiry Selector */}
              <div style={{ zIndex: 100 }}>
                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                  <div style={{ fontSize: '0.9rem', color: 'var(--text-muted-inverse)', fontWeight: '600' }}>Expiry Date</div>
                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: 'var(--accent-purple)', fontWeight: '600' }}>
-                   <input type="checkbox" checked={autoExpiry} onChange={e => setAutoExpiry(e.target.checked)} />
+                   <input type="checkbox" checked={autoExpiry} onChange={e => {
+                     setAutoExpiry(e.target.checked);
+                     if (e.target.checked) setExpiry(expiryOptions[0].value);
+                   }} />
                    Auto-select latest
                  </label>
                </div>

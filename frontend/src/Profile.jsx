@@ -1,50 +1,216 @@
-import { Settings, User, Activity, Maximize2, Sliders } from 'lucide-react';
+import { User, LogOut, Key, Save } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import NavBar from './NavBar';
+import { useAppState } from './StateContext';
+import { useState, useEffect } from 'react';
 
 export default function Profile() {
   const navigate = useNavigate();
+  const { user, authToken, logout, broker } = useAppState();
+  
+  const [fyersId, setFyersId] = useState('');
+  const [appId, setAppId] = useState('');
+  const [totpSecret, setTotpSecret] = useState('');
+  const [pin, setPin] = useState('');
+  const [secretKey, setSecretKey] = useState('');
+
+  const [dhanClientId, setDhanClientId] = useState('');
+  const [dhanPassword, setDhanPassword] = useState('');
+  const [dhanTotpSecret, setDhanTotpSecret] = useState('');
+  const [dhanApiKey, setDhanApiKey] = useState('');
+  const [dhanApiSecret, setDhanApiSecret] = useState('');
+
+  
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState({ type: '', msg: '' });
+
+  useEffect(() => {
+    const fetchCreds = async () => {
+      try {
+        const res = await fetch('/api/user/credentials', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const data = await res.json();
+        if (data.status === 'success' && data.data) {
+          if (data.data.fyers_id) setFyersId(data.data.fyers_id);
+          if (data.data.fyers_app_id) setAppId(data.data.fyers_app_id);
+          if (data.data.dhan_client_id) setDhanClientId(data.data.dhan_client_id);
+          if (data.data.dhan_api_key) setDhanApiKey(data.data.dhan_api_key);
+          // We intentionally do not fetch the PIN or Secrets back for security
+        }
+      } catch (err) {
+        console.error("Failed to fetch creds");
+      }
+    };
+    if (authToken) fetchCreds();
+  }, [authToken]);
+
+  const handleSaveCredentials = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setStatus({ type: '', msg: '' });
+    try {
+      const res = await fetch('/api/user/credentials', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          fyers_id: fyersId,
+          fyers_totp_secret: totpSecret,
+          fyers_pin: pin,
+          fyers_app_id: appId,
+          fyers_secret_key: secretKey,
+          dhan_client_id: dhanClientId,
+          dhan_password: dhanPassword,
+          dhan_totp_secret: dhanTotpSecret,
+          dhan_api_key: dhanApiKey,
+          dhan_api_secret: dhanApiSecret
+        })
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setStatus({ type: 'success', msg: 'Credentials saved successfully!' });
+      } else {
+        setStatus({ type: 'error', msg: data.message || 'Failed to save credentials' });
+      }
+    } catch (err) {
+      setStatus({ type: 'error', msg: 'Network error occurred' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   return (
-    <div className="app-container" style={{ padding: '2rem 1.5rem' }}>
-      <div className="animate-slide-up" style={{ marginBottom: '2.5rem' }}>
-        <h1 style={{ fontSize: '3rem', fontWeight: '400', lineHeight: '1.1', letterSpacing: '-1px' }}>
-          User<br/>
-          <span style={{ fontWeight: '600', color: 'var(--accent-purple)' }}>Profile</span>
-        </h1>
-      </div>
-      
-      <div className="futuristic-card animate-slide-up" style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', marginBottom: '1.5rem' }}>
-        <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-purple), var(--accent-blue))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <User size={40} color="white" />
+    <div style={{
+      minHeight: '100vh',
+      padding: '2rem',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      paddingBottom: '120px'
+    }}>
+      <div className="animate-slide-up" style={{ width: '100%', maxWidth: '400px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        
+        {/* Profile Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div style={{ width: '60px', height: '60px', borderRadius: '16px', background: 'linear-gradient(135deg, #7c3aed, #2563eb)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <User color="#fff" size={28} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '1.4rem', fontWeight: '600', color: '#fff', margin: 0 }}>{user?.username || 'Trader'}</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#4ade80', fontSize: '0.9rem', marginTop: '4px' }}>
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4ade80', boxShadow: '0 0 10px #4ade80' }}></div>
+                Active Session
+              </div>
+            </div>
+          </div>
+          <button onClick={handleLogout} style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px' }}>
+            <LogOut size={24} />
+          </button>
         </div>
-        <div>
-          <div style={{ fontSize: '1.8rem', fontWeight: '600', letterSpacing: '-0.5px' }}>Trader_01</div>
-          <div style={{ color: 'var(--text-muted-inverse)', fontSize: '1rem', fontWeight: '500' }}>Active Fyers Session</div>
-        </div>
-      </div>
 
-      {/* Network Radar Graphic */}
-      <div className="animate-slide-up" style={{ animationDelay: '0.15s', marginBottom: '2rem', height: '140px', borderRadius: '24px', background: '#111111', border: '1px solid #222', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
-        <div style={{ position: 'absolute', width: '250px', height: '250px', borderRadius: '50%', border: '1px solid rgba(59,130,246,0.3)', animation: 'ping 3s cubic-bezier(0, 0, 0.2, 1) infinite' }}></div>
-        <div style={{ position: 'absolute', width: '150px', height: '150px', borderRadius: '50%', border: '1px solid rgba(124,58,237,0.4)', animation: 'ping 3s cubic-bezier(0, 0, 0.2, 1) infinite 1s' }}></div>
-        <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: 'linear-gradient(135deg, #7c3aed, #2563eb)', boxShadow: '0 0 20px rgba(59,130,246,0.6)', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-           <Activity color="white" size={28} />
-        </div>
-      </div>
+        {user?.role === 'admin' && (
+          <button onClick={() => navigate('/admin')} className="futuristic-pill" style={{ background: 'linear-gradient(135deg, #7c3aed, #2563eb)', color: '#fff', border: 'none', padding: '14px', justifyContent: 'center', marginTop: '0.5rem', width: '100%' }}>
+            <span style={{ fontWeight: '600' }}>Open Admin Dashboard</span>
+          </button>
+        )}
 
-      <div className="futuristic-card animate-slide-up" style={{ animationDelay: '0.2s', display: 'flex', flexDirection: 'column', gap: '1rem', paddingBottom: '120px' }}>
-         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1rem 0', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-            <span style={{ fontSize: '1.1rem', fontWeight: '500' }}>Account ID</span>
-            <span style={{ fontSize: '1.1rem', fontWeight: '600' }}>FY10293</span>
-         </div>
-         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1rem 0', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-            <span style={{ fontSize: '1.1rem', fontWeight: '500' }}>API Status</span>
-            <span style={{ fontSize: '1.1rem', fontWeight: '600', color: 'var(--accent-green)' }}>Connected</span>
-         </div>
-         <button style={{ width: '100%', padding: '1rem', marginTop: '1rem', background: '#f3f4f6', border: 'none', borderRadius: '16px', color: '#ff3b30', fontWeight: '600', fontSize: '1.1rem' }}>
-            Logout Device
-         </button>
+        {/* Fyers Credentials Card */}
+        <div className="futuristic-card" style={{ padding: '1.5rem', marginTop: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem' }}>
+            <Key color="#60a5fa" size={20} />
+            <h3 style={{ fontSize: '1.1rem', color: '#fff', margin: 0 }}>Broker API Keys</h3>
+          </div>
+
+          {status.msg && (
+            <div style={{ background: status.type === 'success' ? 'rgba(74, 222, 128, 0.1)' : 'rgba(239, 68, 68, 0.1)', color: status.type === 'success' ? '#4ade80' : '#f87171', padding: '10px', borderRadius: '8px', marginBottom: '1rem', fontSize: '0.9rem', textAlign: 'center' }}>
+              {status.msg}
+            </div>
+          )}
+
+          <form onSubmit={handleSaveCredentials} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {broker === 'Fyers' ? (
+              <>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>Fyers ID</label>
+                  <div className="futuristic-input-container">
+                    <input type="text" value={fyersId} onChange={e => setFyersId(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="e.g. FAJ97539" required={broker === 'Fyers'} />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>App ID</label>
+                  <div className="futuristic-input-container">
+                    <input type="text" value={appId} onChange={e => setAppId(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="e.g. 0LJX4AMOQB-100" required={broker === 'Fyers'} />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>Secret Key</label>
+                  <div className="futuristic-input-container">
+                    <input type="password" value={secretKey} onChange={e => setSecretKey(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="••••••••••••••••" />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>TOTP Secret (32 chars)</label>
+                  <div className="futuristic-input-container">
+                    <input type="password" value={totpSecret} onChange={e => setTotpSecret(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="••••••••••••••••" />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>4-Digit PIN</label>
+                  <div className="futuristic-input-container">
+                    <input type="password" value={pin} onChange={e => setPin(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="••••" />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>Dhan Client ID</label>
+                  <div className="futuristic-input-container">
+                    <input type="text" value={dhanClientId} onChange={e => setDhanClientId(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="e.g. 110012345" required={broker === 'Dhan'} />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>Dhan Password</label>
+                  <div className="futuristic-input-container">
+                    <input type="password" value={dhanPassword} onChange={e => setDhanPassword(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="••••••••" />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>TOTP Secret</label>
+                  <div className="futuristic-input-container">
+                    <input type="password" value={dhanTotpSecret} onChange={e => setDhanTotpSecret(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="••••••••••••••••" />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>API Key</label>
+                  <div className="futuristic-input-container">
+                    <input type="text" value={dhanApiKey} onChange={e => setDhanApiKey(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="API Key" required={broker === 'Dhan'} />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.85rem', color: '#888', marginBottom: '4px', display: 'block' }}>API Secret</label>
+                  <div className="futuristic-input-container">
+                    <input type="password" value={dhanApiSecret} onChange={e => setDhanApiSecret(e.target.value)} className="futuristic-input" style={{ textAlign: 'left', padding: '8px' }} placeholder="••••••••••••••••" />
+                  </div>
+                </div>
+              </>
+            )}
+            
+            <button type="submit" disabled={loading} className="futuristic-pill" style={{ background: '#2563eb', color: '#fff', border: 'none', justifyContent: 'center', marginTop: '0.5rem', padding: '12px', width: '100%' }}>
+              {loading ? 'Saving...' : <><Save size={18} style={{ marginRight: '8px' }} /> Save Credentials</>}
+            </button>
+          </form>
+        </div>
+
       </div>
 
       <NavBar />
