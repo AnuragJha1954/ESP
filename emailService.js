@@ -104,7 +104,7 @@ const sendApprovalEmail = async (userEmail, name, generatedUsername, generatedPa
                     </div>
 
                     <div class="btn-container">
-                        <a href="https://tradopad.infirow.in" class="btn">Initialize Terminal</a>
+                        <a href="https://tradopad.infirow.in" class="btn" style="color: #ffffff;">Initialize Terminal</a>
                     </div>
                 </div>
                 <div class="footer">

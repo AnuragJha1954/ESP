@@ -211,6 +211,22 @@ app.post('/api/admin/users', authenticateToken, authenticateAdmin, async (req, r
     }
 });
 
+app.delete('/api/admin/users/:id', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        const userId = req.params.id;
+        await db.run('BEGIN TRANSACTION');
+        await db.run(`DELETE FROM user_preferences WHERE user_id = ?`, [userId]);
+        await db.run(`DELETE FROM broker_credentials WHERE user_id = ?`, [userId]);
+        await db.run(`DELETE FROM trade_history WHERE user_id = ?`, [userId]);
+        await db.run(`DELETE FROM users WHERE id = ?`, [userId]);
+        await db.run('COMMIT');
+        res.json({ status: 'success', message: 'User deleted successfully' });
+    } catch (err) {
+        await db.run('ROLLBACK');
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
 app.get('/api/admin/user/:userId', authenticateToken, authenticateAdmin, async (req, res) => {
     try {
         const { userId } = req.params;

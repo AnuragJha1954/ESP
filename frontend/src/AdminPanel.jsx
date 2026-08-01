@@ -68,6 +68,26 @@ export default function AdminPanel() {
     }
   };
 
+  const handleDeleteUser = async (userId) => {
+    if (!window.confirm('Are you sure you want to delete this user? This action cannot be undone.')) return;
+    try {
+      const res = await fetch(import.meta.env.VITE_API_URL + `/api/admin/users/${userId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        alert('User deleted successfully');
+        fetchUsers();
+      } else {
+        alert('Failed to delete user: ' + data.message);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('An error occurred while deleting the user.');
+    }
+  };
+
   const fetchGlobalTrades = async () => {
     setTradesLoading(true);
     try {
@@ -440,7 +460,10 @@ export default function AdminPanel() {
                           </span>
                         </td>
                         <td style={tdStyle}>{new Date(u.created_at).toLocaleDateString()}</td>
-                        <td style={{ ...tdStyle, color: '#60a5fa', fontWeight: '600', fontSize: '0.85rem' }}>View →</td>
+                        <td style={{ ...tdStyle, color: '#60a5fa', fontWeight: '600', fontSize: '0.85rem' }}>
+                          <span onClick={() => { setSelectedUserId(u.id); setShowUserModal(true); }} style={{ cursor: 'pointer', marginRight: '15px' }}>View →</span>
+                          <span onClick={() => handleDeleteUser(u.id)} style={{ cursor: 'pointer', color: '#ef4444' }}>Delete</span>
+                        </td>
                       </tr>
                     ))}
                     {usersList.length === 0 && !loading && (
