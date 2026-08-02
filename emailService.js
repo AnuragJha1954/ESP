@@ -21,7 +21,7 @@ const sendApprovalEmail = async (userEmail, name, generatedUsername, generatedPa
             .container { max-width: 600px; margin: 0 auto; background-color: #0a0a0a; border-radius: 16px; border: 1px solid #222; overflow: hidden; box-shadow: 0 0 40px rgba(124, 58, 237, 0.1); }
             .header { padding: 40px 40px 20px 40px; text-align: center; }
             .logo { width: 70px; height: 70px; object-fit: contain; }
-            .sub-logo-text { margin-top: 10px; font-size: 18px; font-weight: 600; background: linear-gradient(135deg, #a855f7 0%, #3b82f6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; color: #a855f7; letter-spacing: 0.5px; }
+            .sub-logo-text { margin-top: 10px; font-size: 18px; font-weight: 600; color: #ffffff; letter-spacing: 0.5px; }
             .hero-image { width: 100%; max-height: 200px; object-fit: cover; border-top: 1px solid #222; border-bottom: 1px solid #222; display: block; }
             .content { padding: 40px; }
             .main-welcome { margin: 0 0 15px 0; font-size: 32px; font-weight: 700; color: #ffffff; }
