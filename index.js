@@ -214,7 +214,12 @@ app.post('/api/admin/users', authenticateToken, authenticateAdmin, async (req, r
 app.delete('/api/admin/users/:id', authenticateToken, authenticateAdmin, async (req, res) => {
     try {
         const userId = req.params.id;
+        const user = await db.get(`SELECT email FROM users WHERE id = ?`, [userId]);
+        
         await db.run('BEGIN TRANSACTION');
+        if (user && user.email) {
+            await db.run(`DELETE FROM waitlist WHERE email = ?`, [user.email]);
+        }
         await db.run(`DELETE FROM user_preferences WHERE user_id = ?`, [userId]);
         await db.run(`DELETE FROM broker_credentials WHERE user_id = ?`, [userId]);
         await db.run(`DELETE FROM trade_history WHERE user_id = ?`, [userId]);
