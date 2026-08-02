@@ -16,12 +16,13 @@ const sendApprovalEmail = async (userEmail, name, generatedUsername, generatedPa
     <head>
         <meta charset="UTF-8">
         <style>
-            body { margin: 0; padding: 0; font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #000000; color: #ffffff; -webkit-font-smoothing: antialiased; }
+            @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700&family=Outfit:wght@400;600&display=swap');
+            body { margin: 0; padding: 0; font-family: 'Outfit', 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #000000; color: #ffffff; -webkit-font-smoothing: antialiased; }
             .wrapper { width: 100%; background-color: #000000; padding: 40px 0; }
             .container { max-width: 600px; margin: 0 auto; background-color: #0a0a0a; border-radius: 16px; border: 1px solid #222; overflow: hidden; box-shadow: 0 0 40px rgba(124, 58, 237, 0.1); }
             .header { padding: 40px 40px 20px 40px; text-align: center; }
             .logo { width: 70px; height: 70px; object-fit: contain; }
-            .sub-logo-text { margin-top: 10px; font-size: 18px; font-weight: 600; color: #ffffff; letter-spacing: 0.5px; }
+            .sub-logo-text { margin-top: 15px; font-family: 'Orbitron', 'Segoe UI', sans-serif; font-size: 26px; font-weight: 700; color: #ffffff; letter-spacing: 2px; text-transform: uppercase; }
             .hero-image { width: 100%; max-height: 200px; object-fit: cover; border-top: 1px solid #222; border-bottom: 1px solid #222; display: block; }
             .content { padding: 40px; }
             .main-welcome { margin: 0 0 15px 0; font-size: 32px; font-weight: 700; color: #ffffff; }
