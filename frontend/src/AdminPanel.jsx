@@ -160,6 +160,28 @@ export default function AdminPanel() {
     }
   };
 
+  const handleDeleteWaitlist = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this waitlist entry?')) return;
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/admin/waitlist/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setWaitlistMessage('Entry deleted successfully!');
+        fetchWaitlist();
+        setTimeout(() => setWaitlistMessage(''), 3000);
+      } else {
+        setWaitlistMessage(`Error: ${data.message || 'Failed to delete'}`);
+        setTimeout(() => setWaitlistMessage(''), 3000);
+      }
+    } catch (err) {
+      setWaitlistMessage('Network error');
+      setTimeout(() => setWaitlistMessage(''), 3000);
+    }
+  };
+
   useEffect(() => {
     if (user && user.role === 'admin') {
       fetchUsers();
@@ -568,10 +590,15 @@ export default function AdminPanel() {
                         {w.status === 'pending' && (
                           <button 
                             onClick={() => handleApproveWaitlist(w.id)}
-                            style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
+                            style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', marginRight: '8px' }}>
                             Approve
                           </button>
                         )}
+                        <button 
+                          onClick={() => handleDeleteWaitlist(w.id)}
+                          style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
+                          Delete
+                        </button>
                       </td>
                     </tr>
                   ))}

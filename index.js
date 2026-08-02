@@ -293,6 +293,16 @@ app.post('/api/admin/waitlist/:id/approve', authenticateToken, authenticateAdmin
     }
 });
 
+app.delete('/api/admin/waitlist/:id', authenticateToken, authenticateAdmin, async (req, res) => {
+    const { id } = req.params;
+    try {
+        await db.run(`DELETE FROM waitlist WHERE id = ?`, [id]);
+        res.json({ status: 'success', message: 'Waitlist entry deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
 // ------------------------------------------------------------------
 // USER PREFERENCES API
 // ------------------------------------------------------------------
