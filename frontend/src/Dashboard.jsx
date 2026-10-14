@@ -28,15 +28,24 @@ export default function Dashboard() {
       .replace(/\s+/g, '')
       .toUpperCase();
 
+    // Custom schedule for NIFTY 50: 19th October (Current), then every Tuesday
+    if (cleanIndex === 'NIFTY') {
+      return [
+        { label: '19 OCT 2026 (Current)', value: '19OCT26' },
+        { label: '27 OCT 2026', value: '27OCT26' },
+        { label: '03 NOV 2026', value: '03NOV26' },
+        { label: '10 NOV 2026 (Monthly)', value: '10NOV26' }
+      ];
+    }
+
     const expiryDays = {
-      'NIFTY': 4,       // Thursday
       'BANKNIFTY': 3,   // Wednesday
       'FINNIFTY': 2,    // Tuesday
       'MIDCPNIFTY': 1,  // Monday
       'SENSEX': 5,      // Friday
       'BANKEX': 1       // Monday
     };
-    const targetDay = expiryDays[cleanIndex] !== undefined ? expiryDays[cleanIndex] : 4; 
+    const targetDay = expiryDays[cleanIndex] !== undefined ? expiryDays[cleanIndex] : 2; // Default to Tuesday
     const options = [];
     const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
     
