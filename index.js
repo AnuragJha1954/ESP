@@ -728,7 +728,7 @@ const executeTrade = async (req, res, side) => {
                 "qty": Number(quantity),
                 "type": 2, // Market
                 "side": side, 
-                "productType": (req.body?.productType || "MARGIN").toUpperCase(),
+                "productType": "INTRADAY",
                 "limitPrice": 0,
                 "stopPrice": 0,
                 "validity": "DAY",
