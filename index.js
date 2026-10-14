@@ -560,15 +560,33 @@ const generateAccessTokenHandler = async (req, res) => {
 const executeTrade = async (req, res, side) => {
     try {
         const userId = req.user?.id || req.params.userId;
-        const { quantity, strike, type, symbol } = req.body;
+        console.log(`\n--- [TRADE REQUEST] ---`);
+        console.log(`User ID: ${userId} | Action: ${side === 1 ? 'BUY (CE)' : 'SELL (PE)'}`);
+        console.log(`Headers Content-Type:`, req.headers['content-type']);
+        console.log(`Request Body:`, JSON.stringify(req.body));
+        
+        const { quantity, strike, type, symbol } = req.body || {};
         
         const prefs = await db.get(`SELECT selected_broker, selected_index, selected_expiry FROM user_preferences WHERE user_id = ?`, [userId]);
+        console.log(`User DB Preferences:`, JSON.stringify(prefs));
         const broker = prefs ? prefs.selected_broker : 'Fyers';
 
         const resolvedSymbol = symbol || (prefs?.selected_index ? `${prefs.selected_index}${prefs.selected_expiry || ''}` : null);
+        console.log(`Resolved Trading Symbol: ${resolvedSymbol}`);
 
         if (!quantity || !strike || !type || !resolvedSymbol) {
-            return res.status(400).json({ status: 'error', message: 'Missing quantity, strike, type, or symbol' });
+            console.error(`[TRADE 400 ERROR] Validation failed - missing fields:`, { quantity, strike, type, resolvedSymbol });
+            return res.status(400).json({ 
+                status: 'error', 
+                message: 'Missing quantity, strike, type, or symbol',
+                missing: {
+                    quantity: !quantity,
+                    strike: !strike,
+                    type: !type,
+                    symbol: !resolvedSymbol
+                },
+                received: req.body || {}
+            });
         }
 
         let orderResponse;
