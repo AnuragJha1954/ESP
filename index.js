@@ -91,6 +91,14 @@ const initDB = async () => {
             console.log("Default admin account created (admin/admin).");
         }
 
+        // Migrate broker token timestamps if not present
+        try {
+            await db.run(`ALTER TABLE broker_credentials ADD COLUMN fyers_token_generated_at DATETIME;`);
+        } catch (e) {}
+        try {
+            await db.run(`ALTER TABLE broker_credentials ADD COLUMN dhan_token_generated_at DATETIME;`);
+        } catch (e) {}
+
         console.log("Database initialized successfully.");
     } catch (err) {
         console.error("Error initializing SQLite database:", err);
@@ -433,27 +441,84 @@ function generateTOTP(secret) {
     return otp.toString().padStart(6, '0');
 }
 
+const isTokenFromToday = (timestamp) => {
+    if (!timestamp) return false;
+    try {
+        const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        const tsString = String(timestamp);
+        const isoString = tsString.endsWith('Z') ? tsString : tsString.replace(' ', 'T') + 'Z';
+        const tokenDateIST = new Date(isoString).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        return tokenDateIST === todayIST;
+    } catch (e) {
+        return false;
+    }
+};
+
 const generateAccessTokenHandler = async (req, res) => {
     try {
         const userId = req.user?.id || req.params.userId;
+        const force = req.query.force === 'true' || req.body?.force === true;
+
         const prefs = await db.get(`SELECT selected_broker FROM user_preferences WHERE user_id = ?`, [userId]);
         const broker = prefs ? prefs.selected_broker : 'Fyers';
 
+        const creds = await db.get(`SELECT * FROM broker_credentials WHERE user_id = ?`, [userId]);
+        const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
         if (broker === 'Dhan') {
+            if (!creds || !creds.dhan_client_id) {
+                return res.status(400).json({ status: 'error', message: 'Missing Dhan credentials for this user.' });
+            }
+
+            const tokenTime = creds.dhan_token_generated_at || creds.updated_at;
+            if (!force && creds.dhan_access_token && isTokenFromToday(tokenTime)) {
+                console.log(`[Dhan Auth] User ${userId} access token is already valid for today (${todayIST}). Skipping generation.`);
+                return res.status(200).json({ 
+                    status: 'success', 
+                    message: 'Dhan access token is already valid for today.', 
+                    broker: 'Dhan',
+                    reused: true,
+                    date: todayIST,
+                    token: creds.dhan_access_token 
+                });
+            }
+
             try {
+                console.log(`[Dhan Auth] Generating new Dhan access token for user ${userId} for ${todayIST}...`);
                 const token = await generateDhanToken(db, userId);
-                return res.status(200).json({ status: 'success', message: 'Dhan Access Token generated successfully.', token });
+                await db.run(`UPDATE broker_credentials SET dhan_access_token = ?, dhan_token_generated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`, [token, userId]);
+                return res.status(200).json({ 
+                    status: 'success', 
+                    message: 'New Dhan Access Token generated successfully for today.', 
+                    broker: 'Dhan',
+                    reused: false,
+                    date: todayIST,
+                    token 
+                });
             } catch (dhanError) {
                 return res.status(500).json({ status: 'error', message: 'Dhan Auto-Login failed', error: dhanError.message });
             }
         }
 
         // Fyers Flow
-        const creds = await db.get(`SELECT * FROM broker_credentials WHERE user_id = ?`, [userId]);
         if (!creds || !creds.fyers_id || !creds.fyers_totp_secret || !creds.fyers_pin || !creds.fyers_app_id || !creds.fyers_secret_key) {
             return res.status(400).json({ status: 'error', message: 'Missing Fyers credentials for this user. Please configure them in your profile.' });
         }
 
+        const fyersTokenTime = creds.fyers_token_generated_at || (creds.fyers_access_token ? creds.updated_at : null);
+        if (!force && creds.fyers_access_token && isTokenFromToday(fyersTokenTime)) {
+            console.log(`[Fyers Auth] User ${userId} access token is already valid for today (${todayIST}). Skipping generation.`);
+            return res.status(200).json({ 
+                status: 'success', 
+                message: 'Fyers access token is already valid for today.', 
+                broker: 'Fyers',
+                reused: true,
+                date: todayIST,
+                token: creds.fyers_access_token 
+            });
+        }
+
+        console.log(`[Fyers Auth] Generating new Fyers access token for user ${userId} for ${todayIST}...`);
         let { fyers_id, fyers_totp_secret, fyers_pin, fyers_app_id, fyers_secret_key } = creds;
         
         // Trim all credentials to prevent copy-paste whitespace errors
@@ -527,8 +592,15 @@ const generateAccessTokenHandler = async (req, res) => {
                 const tokenResponse = tokenReq.data;
 
                 if (tokenResponse.s === 'ok' || tokenResponse.access_token) {
-                    await db.run(`UPDATE broker_credentials SET fyers_access_token = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`, [tokenResponse.access_token, userId]);
-                    return res.status(200).json({ status: 'success', message: 'Fyers Access Token generated successfully.' });
+                    await db.run(`UPDATE broker_credentials SET fyers_access_token = ?, fyers_token_generated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`, [tokenResponse.access_token, userId]);
+                    return res.status(200).json({ 
+                        status: 'success', 
+                        message: 'Fyers Access Token generated successfully for today.', 
+                        broker: 'Fyers',
+                        reused: false,
+                        date: todayIST,
+                        token: tokenResponse.access_token 
+                    });
                 } else {
                     throw new Error(`Failed to generate final access token: ${JSON.stringify(tokenResponse)}`);
                 }
@@ -538,8 +610,6 @@ const generateAccessTokenHandler = async (req, res) => {
                 console.error(`[Fyers Auth] Attempt ${attempt} failed:`, JSON.stringify(lastError));
                 
                 if (attempt < maxAttempts) {
-                    // Wait for a few seconds before retrying (2s, 4s, etc.)
-                    // This is especially useful if TOTP was out of sync or rate limit triggered
                     const waitTime = attempt * 2000;
                     console.log(`[Fyers Auth] Waiting ${waitTime}ms before retry...`);
                     await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -736,6 +806,8 @@ app.post('/api/sell', authenticateToken, (req, res) => executeTrade(req, res, -1
 // HARDWARE ENDPOINTS (No JWT Required)
 // ------------------------------------------------------------------
 app.post('/api/hardware/:userId/broker/generate-access-token', generateAccessTokenHandler);
+app.post('/api/hardware/:userId/broker/check-token', generateAccessTokenHandler);
+app.get('/api/hardware/:userId/broker/check-token', generateAccessTokenHandler);
 app.post('/api/hardware/:userId/buy', (req, res) => executeTrade(req, res, 1));
 app.post('/api/hardware/:userId/sell', (req, res) => executeTrade(req, res, -1));
 

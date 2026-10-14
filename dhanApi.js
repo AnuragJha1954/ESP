@@ -66,7 +66,7 @@ const generateDhanToken = async (db, userId) => {
         const accessToken = totpRes.data.accessToken;
 
         // Save access token to database
-        await db.run(`UPDATE broker_credentials SET dhan_access_token = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`, [accessToken, userId]);
+        await db.run(`UPDATE broker_credentials SET dhan_access_token = ?, dhan_token_generated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`, [accessToken, userId]);
         
         return accessToken;
     } catch (error) {
