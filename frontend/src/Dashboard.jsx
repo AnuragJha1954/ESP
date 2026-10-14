@@ -22,23 +22,33 @@ export default function Dashboard() {
 
   const getNextExpiries = (indexStr) => {
     // 0: Sun, 1: Mon, 2: Tue, 3: Wed, 4: Thu, 5: Fri, 6: Sat
+    const cleanIndex = (indexStr || 'NIFTY')
+      .replace(/\s*50\b/i, '')
+      .replace(/\s*\(BSE\)/i, '')
+      .replace(/\s+/g, '')
+      .toUpperCase();
+
     const expiryDays = {
-      'NIFTY': 4,
-      'BANKNIFTY': 3,
-      'FINNIFTY': 2,
-      'MIDCPNIFTY': 1,
-      'SENSEX': 5,
-      'BANKEX': 1
+      'NIFTY': 4,       // Thursday
+      'BANKNIFTY': 3,   // Wednesday
+      'FINNIFTY': 2,    // Tuesday
+      'MIDCPNIFTY': 1,  // Monday
+      'SENSEX': 5,      // Friday
+      'BANKEX': 1       // Monday
     };
-    const targetDay = expiryDays[indexStr] || 4; 
+    const targetDay = expiryDays[cleanIndex] !== undefined ? expiryDays[cleanIndex] : 4; 
     const options = [];
     const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
     
     let d = new Date();
-    // If today is past 3:30 PM on expiry day, technically it's expired, but for simplicity we just find the next target day.
-    // If today is target day, it will include today.
-    while (d.getDay() !== targetDay) {
-      d.setDate(d.getDate() + 1);
+    const now = new Date();
+    // If today is targetDay and past 15:30 (market close), start from next week
+    if (d.getDay() === targetDay && (now.getHours() > 15 || (now.getHours() === 15 && now.getMinutes() >= 30))) {
+      d.setDate(d.getDate() + 7);
+    } else {
+      while (d.getDay() !== targetDay) {
+        d.setDate(d.getDate() + 1);
+      }
     }
 
     for (let i = 0; i < 4; i++) {

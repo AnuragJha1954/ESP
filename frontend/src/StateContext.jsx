@@ -7,8 +7,8 @@ export function StateProvider({ children }) {
   const [user, setUser] = useState(JSON.parse(localStorage.getItem('esp_user')) || null);
 
   const [broker, setBroker] = useState('Fyers');
-  const [index, setIndex] = useState('NIFTY 50');
-  const [expiry, setExpiry] = useState('26 JUL (Current)');
+  const [index, setIndex] = useState('NIFTY');
+  const [expiry, setExpiry] = useState('');
   const [autoExpiry, setAutoExpiry] = useState(true);
   
   // Execution State
@@ -38,7 +38,10 @@ export function StateProvider({ children }) {
       const data = await res.json();
       if (data.status === 'success' && data.data) {
         if (data.data.selected_broker) setBroker(data.data.selected_broker);
-        if (data.data.selected_index) setIndex(data.data.selected_index);
+        if (data.data.selected_index) {
+          const cleanIdx = data.data.selected_index.replace(/\s*50\b/i, '').replace(/\s+/g, '').toUpperCase();
+          setIndex(cleanIdx);
+        }
         if (data.data.selected_expiry) setExpiry(data.data.selected_expiry);
       }
     } catch (err) {

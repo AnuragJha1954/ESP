@@ -557,6 +557,50 @@ const generateAccessTokenHandler = async (req, res) => {
     }
 };
 
+const formatFyersOptionSymbol = (rawIndex, rawExpiry, strike, rawType) => {
+    let underlying = (rawIndex || 'NIFTY')
+        .replace(/\s*50\b/i, '')
+        .replace(/\s*\(BSE\)/i, '')
+        .replace(/\s+/g, '')
+        .toUpperCase();
+
+    const exchange = (underlying === 'SENSEX' || underlying === 'BANKEX') ? 'BSE' : 'NSE';
+    const optType = (rawType || 'CE').toUpperCase();
+
+    if (!rawExpiry) {
+        return `${exchange}:${underlying}${strike}${optType}`;
+    }
+
+    const cleanExp = rawExpiry.replace(/\s+/g, '').toUpperCase();
+
+    // Matches DDMMMYY e.g. 15OCT26 or 06AUG26
+    const matchDDMMMYY = cleanExp.match(/^(\d{1,2})([A-Z]{3})(\d{2,4})$/);
+    if (matchDDMMMYY) {
+        const day = matchDDMMMYY[1].padStart(2, '0');
+        const monthStr = matchDDMMMYY[2];
+        const yearStr = matchDDMMMYY[3].slice(-2);
+
+        const monthMap = {
+            'JAN': '1', 'FEB': '2', 'MAR': '3', 'APR': '4',
+            'MAY': '5', 'JUN': '6', 'JUL': '7', 'AUG': '8',
+            'SEP': '9', 'OCT': 'O', 'NOV': 'N', 'DEC': 'D'
+        };
+
+        const mCode = monthMap[monthStr] || monthStr;
+        return `${exchange}:${underlying}${yearStr}${mCode}${day}${strike}${optType}`;
+    }
+
+    // Matches MMMYY monthly e.g. OCT26
+    const matchMMMYY = cleanExp.match(/^([A-Z]{3})(\d{2,4})$/);
+    if (matchMMMYY) {
+        const monthStr = matchMMMYY[1];
+        const yearStr = matchMMMYY[2].slice(-2);
+        return `${exchange}:${underlying}${yearStr}${monthStr}${strike}${optType}`;
+    }
+
+    return `${exchange}:${underlying}${cleanExp}${strike}${optType}`;
+};
+
 const executeTrade = async (req, res, side) => {
     try {
         const userId = req.user?.id || req.params.userId;
@@ -571,28 +615,29 @@ const executeTrade = async (req, res, side) => {
         console.log(`User DB Preferences:`, JSON.stringify(prefs));
         const broker = prefs ? prefs.selected_broker : 'Fyers';
 
-        const resolvedSymbol = symbol || (prefs?.selected_index ? `${prefs.selected_index}${prefs.selected_expiry || ''}` : null);
-        console.log(`Resolved Trading Symbol: ${resolvedSymbol}`);
+        const indexName = symbol || prefs?.selected_index || 'NIFTY';
+        const expiryVal = prefs?.selected_expiry || '';
 
-        if (!quantity || !strike || !type || !resolvedSymbol) {
-            console.error(`[TRADE 400 ERROR] Validation failed - missing fields:`, { quantity, strike, type, resolvedSymbol });
+        if (!quantity || !strike || !type) {
+            console.error(`[TRADE 400 ERROR] Validation failed - missing fields:`, { quantity, strike, type });
             return res.status(400).json({ 
                 status: 'error', 
-                message: 'Missing quantity, strike, type, or symbol',
+                message: 'Missing quantity, strike, or type',
                 missing: {
                     quantity: !quantity,
                     strike: !strike,
-                    type: !type,
-                    symbol: !resolvedSymbol
+                    type: !type
                 },
                 received: req.body || {}
             });
         }
 
         let orderResponse;
+        let formattedSymbol;
         
         if (broker === 'Dhan') {
-            orderResponse = await executeDhanTrade(db, userId, { quantity, strike, type, symbol: resolvedSymbol, side });
+            formattedSymbol = `${indexName} ${expiryVal} ${strike} ${type}`.trim();
+            orderResponse = await executeDhanTrade(db, userId, { quantity, strike, type, symbol: formattedSymbol, side });
         } else {
             // Fyers Logic
             const creds = await db.get(`SELECT fyers_access_token, fyers_app_id FROM broker_credentials WHERE user_id = ?`, [userId]);
@@ -605,11 +650,11 @@ const executeTrade = async (req, res, side) => {
             fyers.setRedirectUrl("https://trade.fyers.in/api-login/redirect-uri/index.html");
             fyers.setAccessToken(creds.fyers_access_token);
 
-            const optionType = type.toUpperCase();
-            const tradingSymbol = `NSE:${resolvedSymbol}${strike}${optionType}`;
+            formattedSymbol = formatFyersOptionSymbol(indexName, expiryVal, strike, type);
+            console.log(`[FYERS EXECUTE] Formatted Trading Symbol: ${formattedSymbol}`);
 
             orderResponse = await fyers.place_order({
-                "symbol": tradingSymbol,
+                "symbol": formattedSymbol,
                 "qty": Number(quantity),
                 "type": 2, // Market
                 "side": side, 
@@ -634,9 +679,9 @@ const executeTrade = async (req, res, side) => {
         await db.run(`
             INSERT INTO trade_history (user_id, broker, symbol, type, side, quantity, message) 
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        `, [userId, broker, resolvedSymbol, type, side, quantity, 'Success']);
+        `, [userId, broker, formattedSymbol, type, side, quantity, 'Success']);
 
-        return res.status(200).json({ status: "success", message: "Order placed", broker: broker, symbol: resolvedSymbol, response: orderResponse });
+        return res.status(200).json({ status: "success", message: "Order placed", broker: broker, symbol: formattedSymbol, response: orderResponse });
     } catch (error) {
         console.log(`FAILURE: Execute Trade - Error: ${error.message}`);
         
