@@ -104,7 +104,7 @@ const executeDhanTrade = async (db, userId, tradeDetails) => {
         const orderResponse = await Dhan.placeOrder({
             transactionType: transactionType,
             exchangeSegment: "NSE_FNO",
-            productType: "INTRADAY",
+            productType: tradeDetails.productType || "MARGIN",
             orderType: "MARKET",
             validity: "DAY",
             securityId: strike, // Note: Dhan uses specific securityIds for options. We will send the strike as an identifier for now, but in production, symbol mapping is required.
