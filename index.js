@@ -562,17 +562,19 @@ const executeTrade = async (req, res, side) => {
         const userId = req.user?.id || req.params.userId;
         const { quantity, strike, type, symbol } = req.body;
         
-        if (!quantity || !strike || !type || !symbol) {
-            return res.status(400).json({ status: 'error', message: 'Missing quantity, strike, symbol, or type' });
-        }
-
-        const prefs = await db.get(`SELECT selected_broker FROM user_preferences WHERE user_id = ?`, [userId]);
+        const prefs = await db.get(`SELECT selected_broker, selected_index, selected_expiry FROM user_preferences WHERE user_id = ?`, [userId]);
         const broker = prefs ? prefs.selected_broker : 'Fyers';
+
+        const resolvedSymbol = symbol || (prefs?.selected_index ? `${prefs.selected_index}${prefs.selected_expiry || ''}` : null);
+
+        if (!quantity || !strike || !type || !resolvedSymbol) {
+            return res.status(400).json({ status: 'error', message: 'Missing quantity, strike, type, or symbol' });
+        }
 
         let orderResponse;
         
         if (broker === 'Dhan') {
-            orderResponse = await executeDhanTrade(db, userId, { quantity, strike, type, symbol, side });
+            orderResponse = await executeDhanTrade(db, userId, { quantity, strike, type, symbol: resolvedSymbol, side });
         } else {
             // Fyers Logic
             const creds = await db.get(`SELECT fyers_access_token, fyers_app_id FROM broker_credentials WHERE user_id = ?`, [userId]);
@@ -586,7 +588,7 @@ const executeTrade = async (req, res, side) => {
             fyers.setAccessToken(creds.fyers_access_token);
 
             const optionType = type.toUpperCase();
-            const tradingSymbol = `NSE:${symbol}${strike}${optionType}`;
+            const tradingSymbol = `NSE:${resolvedSymbol}${strike}${optionType}`;
 
             orderResponse = await fyers.place_order({
                 "symbol": tradingSymbol,
@@ -614,9 +616,9 @@ const executeTrade = async (req, res, side) => {
         await db.run(`
             INSERT INTO trade_history (user_id, broker, symbol, type, side, quantity, message) 
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        `, [userId, broker, symbol, type, side, quantity, 'Success']);
+        `, [userId, broker, resolvedSymbol, type, side, quantity, 'Success']);
 
-        return res.status(200).json({ status: "success", message: "Order placed", broker: broker, response: orderResponse });
+        return res.status(200).json({ status: "success", message: "Order placed", broker: broker, symbol: resolvedSymbol, response: orderResponse });
     } catch (error) {
         console.log(`FAILURE: Execute Trade - Error: ${error.message}`);
         
