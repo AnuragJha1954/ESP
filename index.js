@@ -263,6 +263,22 @@ app.get('/api/admin/user/:userId', authenticateToken, authenticateAdmin, async (
     }
 });
 
+app.post('/api/admin/user/:userId/clear-token', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        await db.run(`
+            UPDATE broker_credentials 
+            SET fyers_access_token = NULL, dhan_access_token = NULL, 
+                fyers_token_generated_at = NULL, dhan_token_generated_at = NULL, 
+                updated_at = CURRENT_TIMESTAMP 
+            WHERE user_id = ?
+        `, [userId]);
+        res.json({ status: 'success', message: 'Access tokens cleared successfully for user.' });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
 app.get('/api/admin/waitlist', authenticateToken, authenticateAdmin, async (req, res) => {
     try {
         const entries = await db.all(`SELECT * FROM waitlist ORDER BY created_at DESC`);
