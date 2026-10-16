@@ -134,6 +134,59 @@ const sendApprovalEmail = async (userEmail, name, generatedUsername, generatedPa
     }
 };
 
+const sendOtpEmail = async (userEmail, otpCode) => {
+    const htmlTemplate = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700&family=Outfit:wght@400;600&display=swap');
+            body { margin: 0; padding: 0; font-family: 'Outfit', 'Inter', sans-serif; background-color: #000000; color: #ffffff; }
+            .wrapper { width: 100%; background-color: #000000; padding: 40px 0; }
+            .container { max-width: 500px; margin: 0 auto; background-color: #0a0a0a; border-radius: 16px; border: 1px solid #222; overflow: hidden; padding: 35px; text-align: center; }
+            .logo { width: 60px; height: 60px; object-fit: contain; margin-bottom: 15px; }
+            .brand-name { font-family: 'Orbitron', sans-serif; font-size: 20px; font-weight: 700; color: #ffffff; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 25px; }
+            .title { font-size: 22px; font-weight: 700; color: #ffffff; margin-bottom: 10px; }
+            .text { font-size: 14px; line-height: 1.6; color: #a1a1aa; margin-bottom: 25px; }
+            .otp-box { background: #111111; border: 1px solid #333; border-top: 3px solid #7c3aed; border-radius: 12px; padding: 20px; margin: 25px 0; letter-spacing: 6px; font-family: 'Courier New', monospace; font-size: 32px; font-weight: bold; color: #ffffff; }
+            .footer { font-size: 12px; color: #666; margin-top: 25px; }
+        </style>
+    </head>
+    <body>
+        <div class="wrapper">
+            <div class="container">
+                <img src="https://tradopad.infirow.in/logo.png" alt="Infirow Logo" class="logo" />
+                <div class="brand-name">Infirow Tradopad</div>
+                <div class="title">Your One-Time Login Code</div>
+                <div class="text">Use the 6-digit code below to securely authenticate your session. This code expires in 10 minutes.</div>
+                <div class="otp-box">${otpCode}</div>
+                <div class="text">If you did not request this code, you can safely ignore this email.</div>
+                <div class="footer">© ${new Date().getFullYear()} Infirow Tradopad. All rights reserved.</div>
+            </div>
+        </div>
+    </body>
+    </html>
+    `;
+
+    const mailOptions = {
+        from: '"Infirow Tradopad" <work.infirow@gmail.com>',
+        to: userEmail,
+        subject: `${otpCode} is your Tradopad verification code`,
+        html: htmlTemplate
+    };
+
+    try {
+        const info = await transporter.sendMail(mailOptions);
+        console.log('OTP email sent: ' + info.response);
+        return true;
+    } catch (error) {
+        console.error('Error sending OTP email:', error);
+        return false;
+    }
+};
+
 module.exports = {
-    sendApprovalEmail
+    sendApprovalEmail,
+    sendOtpEmail
 };

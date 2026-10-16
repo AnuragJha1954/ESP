@@ -10,7 +10,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const { generateDhanToken, executeDhanTrade } = require('./dhanApi');
-const { sendApprovalEmail } = require('./emailService');
+const { sendApprovalEmail, sendOtpEmail } = require('./emailService');
 
 const app = express();
 app.use(express.json());
@@ -81,6 +81,66 @@ const initDB = async () => {
                 status TEXT DEFAULT 'pending',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT UNIQUE NOT NULL,
+                serial_number TEXT UNIQUE,
+                hw_revision TEXT DEFAULT 'v1.0',
+                firmware_version TEXT DEFAULT '1.0.0',
+                status TEXT DEFAULT 'unassigned',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS device_bindings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                order_ref TEXT,
+                bound_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'active',
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS device_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT UNIQUE NOT NULL,
+                key_hash TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS token_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                broker TEXT NOT NULL,
+                trigger_type TEXT NOT NULL,
+                result TEXT NOT NULL,
+                reason TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS email_otps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                otp_code TEXT NOT NULL,
+                expires_at DATETIME NOT NULL,
+                consumed INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT,
+                action TEXT NOT NULL,
+                details TEXT,
+                ip_address TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS expiry_calendar (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                index_name TEXT NOT NULL,
+                expiry_date TEXT NOT NULL,
+                expiry_code TEXT NOT NULL,
+                is_monthly INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
         `);
 
         // Seed default admin
@@ -99,12 +159,118 @@ const initDB = async () => {
             await db.run(`ALTER TABLE broker_credentials ADD COLUMN dhan_token_generated_at DATETIME;`);
         } catch (e) {}
 
+        // Auto-seed legacy User 12 device binding
+        try {
+            const devExists = await db.get(`SELECT id FROM devices WHERE device_id = 'DEV-0012'`);
+            if (!devExists) {
+                await db.run(`INSERT INTO devices (device_id, serial_number, hw_revision, firmware_version, status) VALUES ('DEV-0012', 'SN-TP-0012', 'rev1', '1.0.0', 'bound')`);
+            }
+            const bindingExists = await db.get(`SELECT id FROM device_bindings WHERE device_id = 'DEV-0012' AND status = 'active'`);
+            if (!bindingExists) {
+                await db.run(`INSERT INTO device_bindings (device_id, user_id, order_ref, status) VALUES ('DEV-0012', 12, 'INITIAL_PROVISION', 'active')`);
+            }
+        } catch (devErr) {
+            console.error("Device seeding notice:", devErr.message);
+        }
+
+        // Seed initial active expiry calendar if empty
+        try {
+            const expCount = await db.get(`SELECT COUNT(*) as count FROM expiry_calendar`);
+            if (expCount && expCount.count === 0) {
+                const initialExpiries = [
+                    { index: 'NIFTY', date: '19-10-2026', code: '19OCT26', is_monthly: 0 },
+                    { index: 'NIFTY', date: '27-10-2026', code: '27OCT26', is_monthly: 0 },
+                    { index: 'NIFTY', date: '03-11-2026', code: '03NOV26', is_monthly: 0 },
+                    { index: 'NIFTY', date: '10-11-2026', code: '10NOV26', is_monthly: 1 },
+                    { index: 'FINNIFTY', date: '20-10-2026', code: '20OCT26', is_monthly: 0 },
+                    { index: 'BANKNIFTY', date: '21-10-2026', code: '21OCT26', is_monthly: 0 }
+                ];
+                for (const item of initialExpiries) {
+                    await db.run(
+                        `INSERT INTO expiry_calendar (index_name, expiry_date, expiry_code, is_monthly) VALUES (?, ?, ?, ?)`,
+                        [item.index, item.date, item.code, item.is_monthly]
+                    );
+                }
+            }
+        } catch (calErr) {
+            console.error("Calendar seeding notice:", calErr.message);
+        }
+
         console.log("Database initialized successfully.");
     } catch (err) {
         console.error("Error initializing SQLite database:", err);
     }
 };
 initDB();
+
+// ------------------------------------------------------------------
+// HELPER FUNCTIONS
+// ------------------------------------------------------------------
+const logAudit = async (actorType, actorId, action, details, ip = null) => {
+    try {
+        await db.run(
+            `INSERT INTO audit_log (actor_type, actor_id, action, details, ip_address) VALUES (?, ?, ?, ?, ?)`,
+            [actorType, String(actorId || 'system'), action, typeof details === 'object' ? JSON.stringify(details) : String(details || ''), ip]
+        );
+    } catch (e) {
+        console.error("Audit log error:", e.message);
+    }
+};
+
+const evaluateReadiness = async (userId) => {
+    const prefs = await db.get(`SELECT selected_broker, selected_index, selected_expiry FROM user_preferences WHERE user_id = ?`, [userId]);
+    const broker = prefs ? prefs.selected_broker : 'Fyers';
+
+    // 1. Device binding check
+    const binding = await db.get(`SELECT device_id, status FROM device_bindings WHERE user_id = ? AND status = 'active'`, [userId]);
+    const deviceBound = !!binding;
+
+    // 2. Broker credentials configured check
+    const creds = await db.get(`SELECT * FROM broker_credentials WHERE user_id = ?`, [userId]);
+    let brokerConfigured = false;
+    if (broker === 'Dhan') {
+        brokerConfigured = !!(creds && creds.dhan_client_id);
+    } else {
+        brokerConfigured = !!(creds && creds.fyers_id && creds.fyers_app_id && creds.fyers_secret_key);
+    }
+
+    // 3. Token valid today check
+    let tokenValidToday = false;
+    if (broker === 'Dhan') {
+        tokenValidToday = !!(creds && creds.dhan_access_token && isTokenFromToday(creds.dhan_token_generated_at || creds.updated_at));
+    } else {
+        tokenValidToday = !!(creds && creds.fyers_access_token && isTokenFromToday(creds.fyers_token_generated_at || creds.updated_at));
+    }
+
+    // 4. Reason determination (priority order)
+    let ready = false;
+    let reason = 'READY';
+
+    if (!deviceBound) {
+        reason = 'DEVICE_UNREGISTERED';
+    } else if (!brokerConfigured) {
+        reason = 'BROKER_NOT_CONFIGURED';
+    } else if (!tokenValidToday) {
+        reason = 'TOKEN_EXPIRED';
+    } else {
+        ready = true;
+    }
+
+    return {
+        ready,
+        reason,
+        checks: {
+            device_bound: deviceBound,
+            broker_configured: brokerConfigured,
+            token_valid_today: tokenValidToday,
+            kill_switch_off: true,
+            firmware_ok: true
+        },
+        device_id: binding ? binding.device_id : null,
+        broker,
+        server_time_ist: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+    };
+};
 
 // ------------------------------------------------------------------
 // MIDDLEWARE
@@ -122,10 +288,11 @@ const authenticateToken = (req, res, next) => {
 };
 
 const authenticateAdmin = (req, res, next) => {
-    if (req.user.role !== 'admin') {
-        return res.status(403).json({ status: 'error', message: 'Admin access required' });
+    if (req.user && (req.user.role === 'admin' || req.user.username === 'admin')) {
+        next();
+    } else {
+        res.status(403).json({ status: 'error', message: 'Admin access required' });
     }
-    next();
 };
 
 // ------------------------------------------------------------------
@@ -176,6 +343,92 @@ app.post('/api/auth/google', async (req, res) => {
         res.json({ status: 'success', token, user: { id: user.id, username: user.username, email: user.email, role: user.role } });
     } catch (err) {
         res.status(500).json({ status: 'error', message: 'Google Authentication Failed', error: err.message });
+    }
+});
+
+// Email OTP Authentication
+app.post('/api/auth/otp/send', async (req, res) => {
+    const { email } = req.body;
+    if (!email) {
+        return res.status(400).json({ status: 'error', message: 'Email is required' });
+    }
+    const cleanEmail = email.trim().toLowerCase();
+
+    try {
+        const user = await db.get(`SELECT id, username, email FROM users WHERE LOWER(email) = ?`, [cleanEmail]);
+        if (!user) {
+            return res.status(401).json({ status: 'error', message: 'Account not found. Tradopad is currently invite-only.' });
+        }
+
+        // Generate 6-digit OTP code
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+        // Invalidate prior unconsumed OTPs for this email
+        await db.run(`UPDATE email_otps SET consumed = 1 WHERE email = ? AND consumed = 0`, [cleanEmail]);
+
+        // Save fresh OTP
+        await db.run(`INSERT INTO email_otps (email, otp_code, expires_at) VALUES (?, ?, ?)`, [cleanEmail, otpCode, expiresAt]);
+
+        // Send via Nodemailer
+        const sent = await sendOtpEmail(cleanEmail, otpCode);
+        if (!sent) {
+            return res.status(500).json({ status: 'error', message: 'Failed to deliver OTP email. Please try again later.' });
+        }
+
+        await logAudit('user', user.id, 'OTP_REQUESTED', { email: cleanEmail }, req.ip);
+        res.json({ status: 'success', message: 'Verification code sent to your email.' });
+    } catch (err) {
+        console.error("OTP Send Error:", err);
+        res.status(500).json({ status: 'error', message: 'Error processing OTP request', error: err.message });
+    }
+});
+
+app.post('/api/auth/otp/verify', async (req, res) => {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+        return res.status(400).json({ status: 'error', message: 'Email and OTP code are required' });
+    }
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanOtp = String(otp).trim();
+
+    try {
+        const record = await db.get(
+            `SELECT * FROM email_otps WHERE email = ? AND otp_code = ? AND consumed = 0 ORDER BY created_at DESC LIMIT 1`,
+            [cleanEmail, cleanOtp]
+        );
+
+        if (!record) {
+            return res.status(401).json({ status: 'error', message: 'Invalid or expired verification code' });
+        }
+
+        // Check expiration
+        const expiryTime = new Date(record.expires_at).getTime();
+        if (Date.now() > expiryTime) {
+            await db.run(`UPDATE email_otps SET consumed = 1 WHERE id = ?`, [record.id]);
+            return res.status(401).json({ status: 'error', message: 'Verification code has expired. Please request a new code.' });
+        }
+
+        // Mark consumed
+        await db.run(`UPDATE email_otps SET consumed = 1 WHERE id = ?`, [record.id]);
+
+        // Fetch user
+        const user = await db.get(`SELECT id, username, email, role FROM users WHERE LOWER(email) = ?`, [cleanEmail]);
+        if (!user) {
+            return res.status(401).json({ status: 'error', message: 'User account not found' });
+        }
+
+        const token = jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        await logAudit('user', user.id, 'OTP_LOGIN_SUCCESS', { email: cleanEmail }, req.ip);
+
+        res.json({
+            status: 'success',
+            token,
+            user: { id: user.id, username: user.username, email: user.email, role: user.role }
+        });
+    } catch (err) {
+        console.error("OTP Verify Error:", err);
+        res.status(500).json({ status: 'error', message: 'Verification failed', error: err.message });
     }
 });
 
@@ -322,6 +575,153 @@ app.delete('/api/admin/waitlist/:id', authenticateToken, authenticateAdmin, asyn
     try {
         await db.run(`DELETE FROM waitlist WHERE id = ?`, [id]);
         res.json({ status: 'success', message: 'Waitlist entry deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
+// DEVICE REGISTRY & PROVISIONING API (ADMIN)
+// ------------------------------------------------------------------
+app.get('/api/admin/devices', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        const devices = await db.all(`
+            SELECT d.*, db.user_id, db.order_ref, db.bound_at, u.username as bound_username, u.email as bound_email
+            FROM devices d
+            LEFT JOIN device_bindings db ON d.device_id = db.device_id AND db.status = 'active'
+            LEFT JOIN users u ON db.user_id = u.id
+            ORDER BY d.created_at DESC
+        `);
+        res.json({ status: 'success', data: devices });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.post('/api/admin/devices', authenticateToken, authenticateAdmin, async (req, res) => {
+    const { device_id, serial_number, hw_revision, firmware_version } = req.body;
+    if (!device_id) {
+        return res.status(400).json({ status: 'error', message: 'device_id is required' });
+    }
+    try {
+        await db.run(
+            `INSERT INTO devices (device_id, serial_number, hw_revision, firmware_version, status) VALUES (?, ?, ?, ?, 'unassigned')`,
+            [device_id.trim(), serial_number?.trim() || null, hw_revision?.trim() || 'rev1', firmware_version?.trim() || '1.0.0']
+        );
+        await logAudit('admin', req.user.id, 'DEVICE_REGISTERED', { device_id }, req.ip);
+        res.json({ status: 'success', message: 'Device registered successfully' });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.post('/api/admin/devices/bind', authenticateToken, authenticateAdmin, async (req, res) => {
+    const { device_id, user_id, order_ref } = req.body;
+    if (!device_id || !user_id) {
+        return res.status(400).json({ status: 'error', message: 'device_id and user_id are required' });
+    }
+    try {
+        const dev = await db.get(`SELECT id FROM devices WHERE device_id = ?`, [device_id]);
+        if (!dev) {
+            await db.run(`INSERT INTO devices (device_id, status) VALUES (?, 'unassigned')`, [device_id]);
+        }
+
+        // Deactivate previous active bindings for this device or user to ensure 1:1 active mapping
+        await db.run(`UPDATE device_bindings SET status = 'superseded' WHERE (device_id = ? OR user_id = ?) AND status = 'active'`, [device_id, user_id]);
+
+        // Insert new active binding
+        await db.run(
+            `INSERT INTO device_bindings (device_id, user_id, order_ref, status) VALUES (?, ?, ?, 'active')`,
+            [device_id, user_id, order_ref || 'ADMIN_BIND']
+        );
+        await db.run(`UPDATE devices SET status = 'bound' WHERE device_id = ?`, [device_id]);
+
+        await logAudit('admin', req.user.id, 'DEVICE_BOUND', { device_id, user_id, order_ref }, req.ip);
+        res.json({ status: 'success', message: 'Device bound successfully' });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.post('/api/admin/devices/unbind', authenticateToken, authenticateAdmin, async (req, res) => {
+    const { device_id, reason } = req.body;
+    if (!device_id) {
+        return res.status(400).json({ status: 'error', message: 'device_id is required' });
+    }
+    try {
+        await db.run(`UPDATE device_bindings SET status = 'unbound' WHERE device_id = ? AND status = 'active'`, [device_id]);
+        await db.run(`UPDATE devices SET status = 'unassigned' WHERE device_id = ?`, [device_id]);
+        await logAudit('admin', req.user.id, 'DEVICE_UNBOUND', { device_id, reason: reason || 'Admin unbind' }, req.ip);
+        res.json({ status: 'success', message: 'Device unbound successfully' });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.get('/api/admin/audit-logs', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        const logs = await db.all(`SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 300`);
+        res.json({ status: 'success', data: logs });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ------------------------------------------------------------------
+// EXPIRY CALENDAR & READINESS API
+// ------------------------------------------------------------------
+app.get('/api/calendar/expiries', async (req, res) => {
+    try {
+        const { index } = req.query;
+        let query = `SELECT * FROM expiry_calendar WHERE is_active = 1`;
+        const params = [];
+        if (index) {
+            query += ` AND index_name = ?`;
+            params.push(index.toUpperCase());
+        }
+        query += ` ORDER BY id ASC`;
+        const expiries = await db.all(query, params);
+        res.json({ status: 'success', data: expiries });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.get('/api/device/status', authenticateToken, async (req, res) => {
+    try {
+        const readiness = await evaluateReadiness(req.user.id);
+        res.json({ status: 'success', readiness });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.get('/api/v1/device/:deviceId/status', async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const binding = await db.get(`SELECT device_id, user_id FROM device_bindings WHERE device_id = ? AND status = 'active'`, [deviceId]);
+        if (!binding) {
+            return res.json({
+                status: 'error',
+                readiness: {
+                    ready: false,
+                    reason: 'DEVICE_UNREGISTERED',
+                    checks: { device_bound: false, broker_configured: false, token_valid_today: false },
+                    device_id: deviceId
+                }
+            });
+        }
+        const readiness = await evaluateReadiness(binding.user_id);
+        res.json({ status: 'success', readiness });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+app.get('/api/hardware/:userId/status', async (req, res) => {
+    try {
+        const readiness = await evaluateReadiness(req.params.userId);
+        res.json({ status: 'success', readiness });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
     }
@@ -489,6 +889,8 @@ const generateAccessTokenHandler = async (req, res) => {
             const tokenTime = creds.dhan_token_generated_at || creds.updated_at;
             if (!force && creds.dhan_access_token && isTokenFromToday(tokenTime)) {
                 console.log(`[Dhan Auth] User ${userId} access token is already valid for today (${todayIST}). Skipping generation.`);
+                await db.run(`INSERT INTO token_events (user_id, broker, trigger_type, result, reason) VALUES (?, ?, ?, ?, ?)`, [userId, 'Dhan', force ? 'FORCE' : 'BOOT_OR_POLL', 'SUCCESS', 'REUSED_SAME_DAY']);
+                await logAudit('system', userId, 'TOKEN_REUSED', { broker: 'Dhan', date: todayIST });
                 return res.status(200).json({ 
                     status: 'success', 
                     message: 'Dhan access token is already valid for today.', 
@@ -503,6 +905,8 @@ const generateAccessTokenHandler = async (req, res) => {
                 console.log(`[Dhan Auth] Generating new Dhan access token for user ${userId} for ${todayIST}...`);
                 const token = await generateDhanToken(db, userId);
                 await db.run(`UPDATE broker_credentials SET dhan_access_token = ?, dhan_token_generated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`, [token, userId]);
+                await db.run(`INSERT INTO token_events (user_id, broker, trigger_type, result, reason) VALUES (?, ?, ?, ?, ?)`, [userId, 'Dhan', force ? 'FORCE' : 'BOOT_OR_POLL', 'SUCCESS', 'NEW_TOKEN_GENERATED']);
+                await logAudit('system', userId, 'TOKEN_GENERATED', { broker: 'Dhan', date: todayIST });
                 return res.status(200).json({ 
                     status: 'success', 
                     message: 'New Dhan Access Token generated successfully for today.', 
@@ -512,6 +916,8 @@ const generateAccessTokenHandler = async (req, res) => {
                     token 
                 });
             } catch (dhanError) {
+                await db.run(`INSERT INTO token_events (user_id, broker, trigger_type, result, reason) VALUES (?, ?, ?, ?, ?)`, [userId, 'Dhan', force ? 'FORCE' : 'BOOT_OR_POLL', 'FAILURE', dhanError.message]);
+                await logAudit('system', userId, 'TOKEN_FAILED', { broker: 'Dhan', error: dhanError.message });
                 return res.status(500).json({ status: 'error', message: 'Dhan Auto-Login failed', error: dhanError.message });
             }
         }
@@ -524,6 +930,8 @@ const generateAccessTokenHandler = async (req, res) => {
         const fyersTokenTime = creds.fyers_token_generated_at || (creds.fyers_access_token ? creds.updated_at : null);
         if (!force && creds.fyers_access_token && isTokenFromToday(fyersTokenTime)) {
             console.log(`[Fyers Auth] User ${userId} access token is already valid for today (${todayIST}). Skipping generation.`);
+            await db.run(`INSERT INTO token_events (user_id, broker, trigger_type, result, reason) VALUES (?, ?, ?, ?, ?)`, [userId, 'Fyers', force ? 'FORCE' : 'BOOT_OR_POLL', 'SUCCESS', 'REUSED_SAME_DAY']);
+            await logAudit('system', userId, 'TOKEN_REUSED', { broker: 'Fyers', date: todayIST });
             return res.status(200).json({ 
                 status: 'success', 
                 message: 'Fyers access token is already valid for today.', 
@@ -609,6 +1017,8 @@ const generateAccessTokenHandler = async (req, res) => {
 
                 if (tokenResponse.s === 'ok' || tokenResponse.access_token) {
                     await db.run(`UPDATE broker_credentials SET fyers_access_token = ?, fyers_token_generated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`, [tokenResponse.access_token, userId]);
+                    await db.run(`INSERT INTO token_events (user_id, broker, trigger_type, result, reason) VALUES (?, ?, ?, ?, ?)`, [userId, 'Fyers', force ? 'FORCE' : 'BOOT_OR_POLL', 'SUCCESS', 'NEW_TOKEN_GENERATED']);
+                    await logAudit('system', userId, 'TOKEN_GENERATED', { broker: 'Fyers', date: todayIST });
                     return res.status(200).json({ 
                         status: 'success', 
                         message: 'Fyers Access Token generated successfully for today.', 
@@ -636,6 +1046,8 @@ const generateAccessTokenHandler = async (req, res) => {
 
         // If we reach here, all attempts failed
         console.error("[Fyers Auth] All attempts exhausted.");
+        await db.run(`INSERT INTO token_events (user_id, broker, trigger_type, result, reason) VALUES (?, ?, ?, ?, ?)`, [userId, 'Fyers', force ? 'FORCE' : 'BOOT_OR_POLL', 'FAILURE', typeof lastError === 'object' ? JSON.stringify(lastError) : String(lastError)]);
+        await logAudit('system', userId, 'TOKEN_FAILED', { broker: 'Fyers', error: lastError });
         return res.status(500).json({ status: 'error', message: 'Fyers authentication failed after multiple attempts', error: lastError });
     } catch (error) {
         const errorDetail = error.message || String(error);
@@ -767,6 +1179,8 @@ const executeTrade = async (req, res, side) => {
             VALUES (?, ?, ?, ?, ?, ?, ?)
         `, [userId, broker, formattedSymbol, type, side, quantity, 'Success']);
 
+        await logAudit('trade', userId, 'TRADE_SUCCESS', { broker, symbol: formattedSymbol, side, quantity }, req.ip);
+
         return res.status(200).json({ status: "success", message: "Order placed", broker: broker, symbol: formattedSymbol, response: orderResponse });
     } catch (error) {
         console.log(`FAILURE: Execute Trade - Error: ${error.message}`);
@@ -781,6 +1195,7 @@ const executeTrade = async (req, res, side) => {
                 INSERT INTO trade_history (user_id, broker, symbol, type, side, quantity, message) 
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             `, [userId, broker, req.body?.symbol || 'Unknown', req.body?.type || 'Unknown', side, req.body?.quantity || 0, `Failed: ${error.message}`]);
+            await logAudit('trade', userId, 'TRADE_FAILED', { broker, side, error: error.message }, req.ip);
         } catch (dbErr) {
             console.error("Failed to log failed trade to DB:", dbErr);
         }

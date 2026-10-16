@@ -44,12 +44,98 @@ export default function AdminPanel() {
   const [tradesLoading, setTradesLoading] = useState(false);
 
   // Tabs state
-  const [activeTab, setActiveTab] = useState('users'); // 'users', 'trades', 'waitlist'
+  const [activeTab, setActiveTab] = useState('users'); // 'users', 'trades', 'waitlist', 'devices', 'audit'
 
   // Waitlist state
   const [waitlist, setWaitlist] = useState([]);
   const [waitlistLoading, setWaitlistLoading] = useState(false);
   const [waitlistMessage, setWaitlistMessage] = useState('');
+
+  // Device Registry state
+  const [devices, setDevices] = useState([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+  const [deviceActionMsg, setDeviceActionMsg] = useState('');
+  const [bindForm, setBindForm] = useState({ device_id: '', user_id: '', order_ref: '' });
+
+  // Audit Log state
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+
+  const fetchDevices = async () => {
+    setDevicesLoading(true);
+    try {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/admin/devices', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setDevices(data.data || []);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setDevicesLoading(false);
+    }
+  };
+
+  const fetchAuditLogs = async () => {
+    setAuditLoading(true);
+    try {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/admin/audit-logs', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setAuditLogs(data.data || []);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  const handleBindDevice = async (e) => {
+    e.preventDefault();
+    setDeviceActionMsg('');
+    try {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/admin/devices/bind', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify(bindForm)
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setDeviceActionMsg('Device bound successfully!');
+        setBindForm({ device_id: '', user_id: '', order_ref: '' });
+        fetchDevices();
+        setTimeout(() => setDeviceActionMsg(''), 4000);
+      } else {
+        setDeviceActionMsg('Error: ' + (data.message || 'Failed to bind device'));
+      }
+    } catch (err) {
+      setDeviceActionMsg('Network error.');
+    }
+  };
+
+  const handleUnbindDevice = async (deviceId) => {
+    if (!window.confirm(`Are you sure you want to unbind device ${deviceId}?`)) return;
+    try {
+      const res = await fetch(import.meta.env.VITE_API_URL + '/api/admin/devices/unbind', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({ device_id: deviceId, reason: 'Admin console unbind' })
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        fetchDevices();
+      } else {
+        alert('Failed to unbind: ' + data.message);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -187,6 +273,8 @@ export default function AdminPanel() {
       fetchUsers();
       fetchGlobalTrades();
       fetchWaitlist();
+      fetchDevices();
+      fetchAuditLogs();
     }
   }, [authToken, user]);
 
@@ -415,6 +503,16 @@ export default function AdminPanel() {
             style={{ background: 'transparent', border: 'none', color: activeTab === 'waitlist' ? '#60a5fa' : '#aaa', fontWeight: activeTab === 'waitlist' ? '600' : '400', cursor: 'pointer', fontSize: '1rem', padding: '0.5rem 1rem', borderBottom: activeTab === 'waitlist' ? '2px solid #60a5fa' : '2px solid transparent', whiteSpace: 'nowrap' }}>
             Waitlist
           </button>
+          <button 
+            onClick={() => setActiveTab('devices')}
+            style={{ background: 'transparent', border: 'none', color: activeTab === 'devices' ? '#60a5fa' : '#aaa', fontWeight: activeTab === 'devices' ? '600' : '400', cursor: 'pointer', fontSize: '1rem', padding: '0.5rem 1rem', borderBottom: activeTab === 'devices' ? '2px solid #60a5fa' : '2px solid transparent', whiteSpace: 'nowrap' }}>
+            Devices
+          </button>
+          <button 
+            onClick={() => setActiveTab('audit')}
+            style={{ background: 'transparent', border: 'none', color: activeTab === 'audit' ? '#60a5fa' : '#aaa', fontWeight: activeTab === 'audit' ? '600' : '400', cursor: 'pointer', fontSize: '1rem', padding: '0.5rem 1rem', borderBottom: activeTab === 'audit' ? '2px solid #60a5fa' : '2px solid transparent', whiteSpace: 'nowrap' }}>
+            Audit Log
+          </button>
         </div>
 
         {activeTab === 'users' && (
@@ -607,6 +705,176 @@ export default function AdminPanel() {
                   )}
                   {waitlistLoading && (
                     <tr><td colSpan="8" style={{ textAlign: 'center', padding: '2rem', color: '#666' }}>Loading...</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'devices' && (
+          <div>
+            {/* Bind Device Card */}
+            <div className="futuristic-card" style={cardStyle}>
+              <h2 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: '#fff' }}>Provision & Bind Device</h2>
+              {deviceActionMsg && (
+                <div style={{ color: deviceActionMsg.startsWith('Error') ? '#f87171' : '#4ade80', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                  {deviceActionMsg}
+                </div>
+              )}
+              <form onSubmit={handleBindDevice} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.8rem', alignItems: 'flex-start' }}>
+                <div className="futuristic-input-container" style={{ flex: '1 1 160px' }}>
+                  <input
+                    type="text"
+                    placeholder="Device ID (e.g. DEV-0012)"
+                    value={bindForm.device_id}
+                    onChange={e => setBindForm({ ...bindForm, device_id: e.target.value })}
+                    className="futuristic-input"
+                    style={{ textAlign: 'left', padding: '8px' }}
+                    required
+                  />
+                </div>
+                <div className="futuristic-input-container" style={{ flex: '1 1 120px' }}>
+                  <input
+                    type="number"
+                    placeholder="User ID (e.g. 12)"
+                    value={bindForm.user_id}
+                    onChange={e => setBindForm({ ...bindForm, user_id: e.target.value })}
+                    className="futuristic-input"
+                    style={{ textAlign: 'left', padding: '8px' }}
+                    required
+                  />
+                </div>
+                <div className="futuristic-input-container" style={{ flex: '1 1 160px' }}>
+                  <input
+                    type="text"
+                    placeholder="Order Ref (Optional)"
+                    value={bindForm.order_ref}
+                    onChange={e => setBindForm({ ...bindForm, order_ref: e.target.value })}
+                    className="futuristic-input"
+                    style={{ textAlign: 'left', padding: '8px' }}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="futuristic-pill"
+                  style={{ padding: '8px 20px', background: 'linear-gradient(135deg, #7c3aed, #2563eb)', color: '#fff', border: 'none', height: '42px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Plus size={16} />
+                  <span style={{ fontWeight: '600' }}>Bind Device</span>
+                </button>
+              </form>
+            </div>
+
+            {/* Devices Registry Table */}
+            <div className="futuristic-card" style={cardStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                <h2 style={{ fontSize: '1.2rem', color: '#fff', margin: 0 }}>Registered Consoles ({devices.length})</h2>
+                <button onClick={fetchDevices} style={{ background: 'transparent', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <RefreshCw size={16} /> Refresh
+                </button>
+              </div>
+
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                      <th style={thStyle}>Device ID</th>
+                      <th style={thStyle}>Serial No</th>
+                      <th style={thStyle}>Hardware</th>
+                      <th style={thStyle}>Firmware</th>
+                      <th style={thStyle}>Status</th>
+                      <th style={thStyle}>Bound User</th>
+                      <th style={thStyle}>Bound At</th>
+                      <th style={thStyle}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {devices.map(d => (
+                      <tr key={d.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <td style={{ ...tdStyle, fontWeight: '600', color: '#fff' }}>{d.device_id}</td>
+                        <td style={tdStyle}>{d.serial_number || '-'}</td>
+                        <td style={tdStyle}>{d.hw_revision || 'rev1'}</td>
+                        <td style={tdStyle}>{d.firmware_version || '1.0.0'}</td>
+                        <td style={{ ...tdStyle, color: d.status === 'bound' ? '#4ade80' : '#f59e0b' }}>
+                          {d.status?.toUpperCase()}
+                        </td>
+                        <td style={tdStyle}>
+                          {d.user_id ? (
+                            <span>{d.bound_username || d.bound_email} (ID: {d.user_id})</span>
+                          ) : (
+                            <span style={{ color: '#888' }}>Unassigned</span>
+                          )}
+                        </td>
+                        <td style={tdStyle}>{d.bound_at ? new Date(d.bound_at).toLocaleString() : '-'}</td>
+                        <td style={tdStyle}>
+                          {d.user_id && (
+                            <button
+                              onClick={() => handleUnbindDevice(d.device_id)}
+                              style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '4px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem' }}>
+                              Unbind
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {devices.length === 0 && !devicesLoading && (
+                      <tr><td colSpan="8" style={{ textAlign: 'center', padding: '2rem', color: '#666' }}>No devices registered yet.</td></tr>
+                    )}
+                    {devicesLoading && (
+                      <tr><td colSpan="8" style={{ textAlign: 'center', padding: '2rem', color: '#666' }}>Loading devices...</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'audit' && (
+          <div className="futuristic-card" style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h2 style={{ fontSize: '1.2rem', color: '#fff', margin: 0 }}>Append-Only Audit Ledger ({auditLogs.length})</h2>
+              <button onClick={fetchAuditLogs} style={{ background: 'transparent', border: 'none', color: '#60a5fa', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <RefreshCw size={16} /> Refresh
+              </button>
+            </div>
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                    <th style={thStyle}>ID</th>
+                    <th style={thStyle}>Timestamp</th>
+                    <th style={thStyle}>Actor</th>
+                    <th style={thStyle}>Action</th>
+                    <th style={thStyle}>Details</th>
+                    <th style={thStyle}>IP Address</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {auditLogs.map(log => (
+                    <tr key={log.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <td style={tdStyle}>{log.id}</td>
+                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{new Date(log.created_at).toLocaleString()}</td>
+                      <td style={tdStyle}>
+                        <span style={{ background: 'rgba(255,255,255,0.08)', padding: '2px 6px', borderRadius: '4px', fontSize: '0.8rem' }}>
+                          {log.actor_type}:{log.actor_id}
+                        </span>
+                      </td>
+                      <td style={{ ...tdStyle, fontWeight: '600', color: log.action.includes('FAILED') ? '#f87171' : log.action.includes('SUCCESS') || log.action.includes('BOUND') ? '#4ade80' : '#60a5fa' }}>
+                        {log.action}
+                      </td>
+                      <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.8rem', maxWidth: '350px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {log.details}
+                      </td>
+                      <td style={tdStyle}>{log.ip_address || '-'}</td>
+                    </tr>
+                  ))}
+                  {auditLogs.length === 0 && !auditLoading && (
+                    <tr><td colSpan="6" style={{ textAlign: 'center', padding: '2rem', color: '#666' }}>No audit log entries recorded yet.</td></tr>
+                  )}
+                  {auditLoading && (
+                    <tr><td colSpan="6" style={{ textAlign: 'center', padding: '2rem', color: '#666' }}>Loading audit logs...</td></tr>
                   )}
                 </tbody>
               </table>
