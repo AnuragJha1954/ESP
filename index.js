@@ -832,7 +832,8 @@ app.post('/api/auth/login', async (req, res) => {
         }
 
         const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ status: 'success', token, user: { id: user.id, username: user.username, role: user.role } });
+        const binding = await db.get(`SELECT device_id FROM device_bindings WHERE user_id = ? AND status = 'active'`, [user.id]);
+        res.json({ status: 'success', token, user: { id: user.id, username: user.username, email: user.email, role: user.role, bound_device_id: binding ? binding.device_id : null } });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
     }
@@ -860,7 +861,8 @@ app.post('/api/auth/google', async (req, res) => {
         }
 
         const token = jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-        res.json({ status: 'success', token, user: { id: user.id, username: user.username, email: user.email, role: user.role } });
+        const binding = await db.get(`SELECT device_id FROM device_bindings WHERE user_id = ? AND status = 'active'`, [user.id]);
+        res.json({ status: 'success', token, user: { id: user.id, username: user.username, email: user.email, role: user.role, bound_device_id: binding ? binding.device_id : null } });
     } catch (err) {
         res.status(500).json({ status: 'error', message: 'Google Authentication Failed', error: err.message });
     }
@@ -941,10 +943,11 @@ app.post('/api/auth/otp/verify', async (req, res) => {
         const token = jwt.sign({ id: user.id, username: user.username, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         await logAudit('user', user.id, 'OTP_LOGIN_SUCCESS', { email: cleanEmail }, req.ip);
 
+        const binding = await db.get(`SELECT device_id FROM device_bindings WHERE user_id = ? AND status = 'active'`, [user.id]);
         res.json({
             status: 'success',
             token,
-            user: { id: user.id, username: user.username, email: user.email, role: user.role }
+            user: { id: user.id, username: user.username, email: user.email, role: user.role, bound_device_id: binding ? binding.device_id : null }
         });
     } catch (err) {
         console.error("OTP Verify Error:", err);
@@ -1757,13 +1760,6 @@ async function fetchLiveIndianMarketData(force = false) {
                     change: '12ms ping',
                     pct: 0,
                     up: true
-                },
-                {
-                    symbol: 'NODE ESP32',
-                    price: 'DEV-0012',
-                    change: '88% Batt',
-                    pct: 0,
-                    up: true
                 }
             ];
 
@@ -1803,8 +1799,7 @@ app.get(['/api/market/quotes', '/api/market/ticker'], async (req, res) => {
             { symbol: 'INDIA VIX', price: 17.16, change: 0.30, pct: 1.78, up: true },
             { symbol: 'NIFTY 22750 CE', price: 148.50, change: 18.20, pct: 14.0, up: true },
             { symbol: 'NIFTY 22750 PE', price: 92.40, change: -12.10, pct: -11.5, up: false },
-            { symbol: 'FYERS ROUTE', price: 'CONNECTED', change: '12ms ping', pct: 0, up: true },
-            { symbol: 'NODE ESP32', price: 'DEV-0012', change: '88% Batt', pct: 0, up: true }
+            { symbol: 'FYERS ROUTE', price: 'CONNECTED', change: '12ms ping', pct: 0, up: true }
         ];
 
         res.json({
@@ -2135,6 +2130,23 @@ app.post(['/api/hardware/:userId/switch-broker', '/api/hardware/:userId/toggle-b
 // ------------------------------------------------------------------
 // USER PREFERENCES API
 // ------------------------------------------------------------------
+
+app.get('/api/user/profile', authenticateToken, async (req, res) => {
+    try {
+        const user = await db.get(`
+            SELECT u.id, u.username, u.name, u.email, u.role, u.created_at,
+                   db.device_id AS bound_device_id
+            FROM users u
+            LEFT JOIN device_bindings db ON u.id = db.user_id AND db.status = 'active'
+            WHERE u.id = ?
+        `, [req.user.id]);
+        if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
+        res.json({ status: 'success', data: user });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
 app.get('/api/user/preferences', authenticateToken, async (req, res) => {
     try {
         let prefs = await db.get(`SELECT * FROM user_preferences WHERE user_id = ?`, [req.user.id]);
@@ -2983,7 +2995,7 @@ app.post('/api/device/lock', authenticateToken, async (req, res) => {
         const userId = req.user.id;
         updateDeviceLockCache(userId, true);
         const binding = await db.get(`SELECT device_id FROM device_bindings WHERE user_id = ? AND status = 'active'`, [userId]);
-        const deviceId = binding ? binding.device_id : 'DEV-0012';
+        const deviceId = binding ? binding.device_id : null;
         const reason = req.body?.reason || 'Console locked by operator from mobile app';
 
         await db.run(`

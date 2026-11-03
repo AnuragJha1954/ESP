@@ -1,21 +1,21 @@
 /**
- * Infirow Tradopad — Client Mock Fallback Data
- * Provides realistic offline / pre-deployment telemetry and session state.
+ * Tradopad — Client Fallback Data
+ * Provides offline / pre-deployment telemetry and session state.
  */
 
 export const mockDeviceTelemetry = {
-  device_id: 'DEV-0012',
-  nickname: 'Desk Console (Primary)',
-  serial_number: 'SN-TP-0012',
+  device_id: null,
+  nickname: 'Unbound Console',
+  serial_number: null,
   hw_revision: 'rev1',
   firmware_version: '1.0.0',
-  battery_pct: 88,
-  wifi_ssid: 'Tradopad_Desk_5G',
-  wifi_rssi_dbm: -58,
-  is_online: true,
-  last_heartbeat: new Date().toISOString(),
-  bound_date: '2026-10-14',
-  warranty_status: 'Active (1 Year Standard)',
+  battery_pct: null,
+  wifi_ssid: null,
+  wifi_rssi_dbm: null,
+  is_online: false,
+  last_heartbeat: null,
+  bound_date: null,
+  warranty_status: 'Standard',
 };
 
 export const mockRiskSettings = {

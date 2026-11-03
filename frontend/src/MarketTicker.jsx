@@ -7,8 +7,7 @@ const INITIAL_TICKER = [
   { symbol: 'FINNIFTY', price: '23,890.60', change: '-28.40 (-0.12%)', up: false },
   { symbol: 'INDIA VIX', price: '13.84', change: '-0.30 (-2.12%)', up: false },
   { symbol: 'NIFTY 24200 CE', price: '142.50', change: '+18.20 (+14.6%)', up: true },
-  { symbol: 'NIFTY 24150 PE', price: '98.20', change: '-14.30 (-12.7%)', up: false },
-  { symbol: 'NODE ESP32', price: 'DEV-0012', change: 'AES-256 Active', up: true }
+  { symbol: 'NIFTY 24150 PE', price: '98.20', change: '-14.30 (-12.7%)', up: false }
 ];
 
 export default function MarketTicker() {

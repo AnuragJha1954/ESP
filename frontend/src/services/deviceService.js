@@ -11,26 +11,37 @@ export async function fetchDeviceStatus() {
   const res = await apiRequest('/api/device/status');
   
   // Read local telemetry and arming state
-  const savedTelemetry = JSON.parse(localStorage.getItem(STORAGE_KEYS.TELEMETRY) || 'null') || mockDeviceTelemetry;
+  const savedTelemetry = JSON.parse(localStorage.getItem(STORAGE_KEYS.TELEMETRY) || 'null');
   const armingState = getArmingState();
   const killSwitch = getKillSwitchState();
 
   let readiness = {
     ready: false,
-    reason: 'TOKEN_MISSING',
+    reason: 'DEVICE_UNREGISTERED',
     checks: {
-      device_bound: true,
-      broker_configured: true,
+      device_bound: false,
+      broker_configured: false,
       token_valid_today: false,
       kill_switch_off: !killSwitch.active,
       firmware_ok: true
     },
-    device_id: savedTelemetry.device_id,
+    device_id: null,
     broker: 'Fyers',
     server_time_ist: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
   };
 
-  let liveTelemetry = { ...savedTelemetry };
+  let liveTelemetry = {
+    device_id: null,
+    nickname: 'No Console Linked',
+    serial_number: null,
+    hw_revision: 'rev1',
+    firmware_version: '1.0.0',
+    battery_pct: null,
+    wifi_ssid: null,
+    wifi_rssi_dbm: null,
+    is_online: false,
+    last_heartbeat: null
+  };
 
   if (res.ok && res.data?.readiness) {
     const r = res.data.readiness;
@@ -46,14 +57,39 @@ export async function fetchDeviceStatus() {
       readiness.reason = 'KILL_SWITCH_ON';
     }
 
-    // Merge live hardware telemetry from server into telemetry state
-    liveTelemetry = {
-      ...savedTelemetry,
-      device_id: r.device_id || savedTelemetry.device_id,
-      battery_pct: (r.battery_pct !== null && r.battery_pct !== undefined) ? r.battery_pct : savedTelemetry.battery_pct,
-      wifi_rssi_dbm: (r.wifi_rssi !== null && r.wifi_rssi !== undefined) ? r.wifi_rssi : (savedTelemetry.wifi_rssi_dbm || -58),
-      last_heartbeat: r.last_heartbeat || savedTelemetry.last_heartbeat
-    };
+    const isBound = !!(r.checks?.device_bound && r.device_id);
+
+    if (isBound) {
+      liveTelemetry = {
+        ...(savedTelemetry || {}),
+        device_id: r.device_id,
+        nickname: savedTelemetry?.nickname || 'Desk Console (Primary)',
+        serial_number: r.serial_number || `SN-TP-${String(r.device_id).replace(/^DEV-?/i, '')}`,
+        hw_revision: r.hw_revision || savedTelemetry?.hw_revision || 'rev1',
+        firmware_version: r.firmware_version || savedTelemetry?.firmware_version || '1.0.0',
+        battery_pct: (r.battery_pct !== null && r.battery_pct !== undefined) ? r.battery_pct : (savedTelemetry?.battery_pct ?? 100),
+        wifi_rssi_dbm: (r.wifi_rssi !== null && r.wifi_rssi !== undefined) ? r.wifi_rssi : (savedTelemetry?.wifi_rssi_dbm ?? -60),
+        wifi_ssid: savedTelemetry?.wifi_ssid || 'Tradopad_Desk_5G',
+        is_online: r.ready || !!r.last_heartbeat,
+        last_heartbeat: r.last_heartbeat || savedTelemetry?.last_heartbeat || new Date().toISOString()
+      };
+    } else {
+      liveTelemetry = {
+        device_id: null,
+        nickname: 'No Console Linked',
+        serial_number: null,
+        hw_revision: 'rev1',
+        firmware_version: '1.0.0',
+        battery_pct: null,
+        wifi_ssid: null,
+        wifi_rssi_dbm: null,
+        is_online: false,
+        last_heartbeat: null
+      };
+      try {
+        localStorage.removeItem(STORAGE_KEYS.TELEMETRY);
+      } catch (e) {}
+    }
   }
 
   return {
@@ -183,7 +219,7 @@ export async function fetchDeviceLockStatus() {
 }
 
 export function updateDeviceNickname(nickname) {
-  const current = JSON.parse(localStorage.getItem(STORAGE_KEYS.TELEMETRY) || 'null') || mockDeviceTelemetry;
+  const current = JSON.parse(localStorage.getItem(STORAGE_KEYS.TELEMETRY) || 'null') || {};
   const updated = { ...current, nickname };
   localStorage.setItem(STORAGE_KEYS.TELEMETRY, JSON.stringify(updated));
   return updated;

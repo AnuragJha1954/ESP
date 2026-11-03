@@ -395,7 +395,7 @@ export default function History() {
                         {t.message || 'Dispatched through physical MCU trigger button'}
                       </span>
                       <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--text-3)', flexShrink: 0 }}>
-                        Node DEV-0012
+                        {t.device_id ? `Node ${t.device_id}` : (user?.bound_device_id ? `Node ${user.bound_device_id}` : 'Terminal Direct')}
                       </span>
                     </div>
                   </div>

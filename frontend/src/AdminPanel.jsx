@@ -106,8 +106,7 @@ const INITIAL_TICKER = [
   { symbol: 'INDIA VIX', price: '13.84', change: '-0.30 (-2.12%)', up: false },
   { symbol: 'NIFTY 24200 CE', price: '142.50', change: '+18.20 (+14.6%)', up: true },
   { symbol: 'NIFTY 24150 PE', price: '98.20', change: '-14.30 (-12.7%)', up: false },
-  { symbol: 'BROKER FYERS', price: 'CONNECTED', change: '12ms latency', up: true },
-  { symbol: 'NODE ESP32', price: 'DEV-0012', change: 'AES-256 Active', up: true }
+  { symbol: 'BROKER FYERS', price: 'CONNECTED', change: '12ms latency', up: true }
 ];
 
 export default function AdminPanel() {

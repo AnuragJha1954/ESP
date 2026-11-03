@@ -18,6 +18,29 @@ export default function Profile() {
   // Compliance Status
   const [complianceStatus] = useState(getRiskDisclosureStatus());
 
+  // Bound Device State
+  const [boundDeviceId, setBoundDeviceId] = useState(user?.bound_device_id || null);
+
+  useEffect(() => {
+    if (!authToken) return;
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch((import.meta.env.VITE_API_URL || '') + '/api/device/status', {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        const data = await res.json();
+        if (data.status === 'success' && data.readiness) {
+          if (data.readiness.checks?.device_bound && data.readiness.device_id) {
+            setBoundDeviceId(data.readiness.device_id);
+          } else {
+            setBoundDeviceId(null);
+          }
+        }
+      } catch (e) {}
+    };
+    fetchStatus();
+  }, [authToken]);
+
   // DPDP Act 2023 Erasure Request State
   const [deletionRequest, setDeletionRequest] = useState(null);
   const [deletionModalOpen, setDeletionModalOpen] = useState(false);
@@ -234,8 +257,17 @@ export default function Profile() {
 
             <div className="tile">
               <span className="tile-label">Bound Hardware Node</span>
-              <div className="tile-value" style={{ color: 'var(--brand-ink)' }}>DEV-0012</div>
-              <div className="tile-meta ok">AES-256 Paired</div>
+              {boundDeviceId ? (
+                <>
+                  <div className="tile-value" style={{ color: 'var(--brand-ink)' }}>{boundDeviceId}</div>
+                  <div className="tile-meta ok">AES-256 Paired</div>
+                </>
+              ) : (
+                <>
+                  <div className="tile-value" style={{ color: 'var(--text-3)' }}>None</div>
+                  <div className="tile-meta" style={{ color: 'var(--amber, #f59e0b)' }}>No Console Linked</div>
+                </>
+              )}
             </div>
 
             <div className="tile">
