@@ -75,10 +75,13 @@ const generateDhanToken = async (db, userId) => {
     }
 };
 
-const executeDhanTrade = async (db, userId, tradeDetails) => {
+const executeDhanTrade = async (db, userId, tradeDetails, passedCreds = null) => {
     const { quantity, strike, type, symbol, side } = tradeDetails;
     
-    const creds = await db.get(`SELECT dhan_client_id, dhan_access_token, dhan_api_key FROM broker_credentials WHERE user_id = ?`, [userId]);
+    let creds = passedCreds;
+    if (!creds || !creds.dhan_access_token) {
+        creds = await db.get(`SELECT dhan_client_id, dhan_access_token, dhan_api_key FROM broker_credentials WHERE user_id = ?`, [userId]);
+    }
     if (!creds || !creds.dhan_access_token) {
         throw new Error('No Dhan access token found. Please run the generate token flow first.');
     }

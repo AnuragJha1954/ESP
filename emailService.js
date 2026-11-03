@@ -186,7 +186,104 @@ const sendOtpEmail = async (userEmail, otpCode) => {
     }
 };
 
+const sendDeletionConfirmationEmail = async (userEmail, username, requestedAt, approvedAt) => {
+    const htmlTemplate = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;700&family=IBM+Plex+Sans:wght@400;600;700&display=swap');
+            body { margin: 0; padding: 0; font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #060814; color: #f8fafc; }
+            .wrapper { width: 100%; background-color: #060814; padding: 40px 0; }
+            .container { max-width: 560px; margin: 0 auto; background-color: #0c1122; border-radius: 16px; border: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden; padding: 36px 32px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8); }
+            .badge { display: inline-block; font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 700; color: #10b981; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); padding: 3px 8px; border-radius: 4px; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 16px; }
+            .title { font-size: 22px; font-weight: 700; color: #ffffff; margin-bottom: 12px; }
+            .text { font-size: 14px; line-height: 1.6; color: #94a3b8; margin-bottom: 20px; }
+            .summary-box { background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 18px; margin: 24px 0; }
+            .summary-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.05); font-size: 13px; }
+            .summary-item:last-child { border-bottom: none; }
+            .label { color: #64748b; font-weight: 500; }
+            .value { color: #f1f5f9; font-weight: 600; font-family: 'IBM Plex Mono', monospace; }
+            .purged-list { background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 10px; padding: 18px; margin: 20px 0; font-size: 13px; color: #fca5a5; line-height: 1.6; }
+            .purged-title { font-weight: 700; color: #f87171; margin-bottom: 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+            .footer { font-size: 11px; color: #475569; text-align: center; margin-top: 30px; line-height: 1.5; font-family: 'IBM Plex Mono', monospace; }
+        </style>
+    </head>
+    <body>
+        <div class="wrapper">
+            <div class="container">
+                <div class="badge">DPDP Act, 2023 · Statutory Notice of Erasure</div>
+                <div class="title">Account & Personal Data Permanently Erased</div>
+                <div class="text">
+                    Dear <strong>@${username}</strong>, this is an official confirmation that your request for account deletion under Section 12 (Right to Correction and Erasure of Personal Data) of the Digital Personal Data Protection (DPDP) Act, 2023 has been reviewed and approved by the Data Protection Officer / Administrator.
+                </div>
+                
+                <div class="purged-list">
+                    <div class="purged-title">Irreversibly Purged Records:</div>
+                    • Personal Profile & Identity Credentials<br/>
+                    • Broker REST API Keys, Client IDs & TOTP Secrets<br/>
+                    • Hardware Keypad Pairing Node (@${username})<br/>
+                    • Order Execution Ledger & Telemetry Logs<br/>
+                    • Device Lock States & Emergency Kill Switch Records
+                </div>
+
+                <div class="summary-box">
+                    <div class="summary-item">
+                        <span class="label">Registered Email:</span>
+                        <span class="value">${userEmail}</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="label">Trader Handle:</span>
+                        <span class="value">@${username}</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="label">Date of Request:</span>
+                        <span class="value">${new Date(requestedAt || Date.now()).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="label">Purge Execution Date:</span>
+                        <span class="value">${new Date(approvedAt || Date.now()).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</span>
+                    </div>
+                    <div class="summary-item">
+                        <span class="label">Compliance Status:</span>
+                        <span class="value" style="color: #10b981;">COMPLETED · 100% PURGED</span>
+                    </div>
+                </div>
+
+                <div class="text" style="font-size: 12px; color: #64748b;">
+                    No further action is required from you. You can no longer authenticate using these credentials or trigger orders from previously paired hardware consoles. Thank you for trading with Tradopad.
+                </div>
+
+                <div class="footer">
+                    Tradopad Automated Trading Terminal<br/>
+                    Compliance Reference: DPDP-SEC12-ERASURE · ${Date.now()}
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    `;
+
+    const mailOptions = {
+        from: '"Tradopad Compliance" <work.infirow@gmail.com>',
+        to: userEmail,
+        subject: 'Official Confirmation: Your Account and Personal Data have been Permanently Deleted (DPDP Act)',
+        html: htmlTemplate
+    };
+
+    try {
+        const info = await transporter.sendMail(mailOptions);
+        console.log('[DPDP ERASURE EMAIL SUCCESS]: Delivered to ' + userEmail + ' (' + info.response + ')');
+        return true;
+    } catch (error) {
+        console.error('[DPDP ERASURE EMAIL NOTICE]:', error.message);
+        return false;
+    }
+};
+
 module.exports = {
     sendApprovalEmail,
-    sendOtpEmail
+    sendOtpEmail,
+    sendDeletionConfirmationEmail
 };

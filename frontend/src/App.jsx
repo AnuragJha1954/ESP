@@ -1,7 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Splash from './Splash';
 import Dashboard from './Dashboard';
-import Trade from './Trade';
+import DeviceTab from './DeviceTab';
 import History from './History';
 import Profile from './Profile';
 import DeviceCheck from './DeviceCheck';
@@ -10,6 +10,8 @@ import { useState, useEffect } from 'react';
 import PWAPrompt from './PWAPrompt';
 import Login from './Login';
 import AdminPanel from './AdminPanel';
+import RiskDisclosureModal from './components/RiskDisclosureModal';
+import { getRiskDisclosureStatus } from './services/complianceService';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 
 // Replace with your actual Google Client ID from Google Cloud Console
@@ -37,45 +39,86 @@ function ProtectedRoute({ children, requireAdmin, mobileOnly = false }) {
 
 function MainAppRoutes() {
   const { authToken, user } = useAppState();
+  const location = useLocation();
+
+  // SEBI Risk Disclosure: Strictly shown for traders in the app upon login, NEVER in the admin panel
+  const isAppRoute = !location.pathname.startsWith('/admin');
+  const [showRiskModal, setShowRiskModal] = useState(() => {
+    return sessionStorage.getItem('tradopad_sebi_acknowledged') !== 'true';
+  });
+
+  useEffect(() => {
+    if (authToken && isAppRoute && user?.role !== 'admin') {
+      if (sessionStorage.getItem('tradopad_sebi_acknowledged') !== 'true') {
+        setShowRiskModal(true);
+      }
+    }
+  }, [authToken, isAppRoute, user]);
+
   return (
     <>
+      {/* SEBI Compliance Risk Disclosure Modal: ONLY in user app, NEVER in admin panel */}
+      {isAppRoute && (
+        <RiskDisclosureModal 
+          isOpen={Boolean(authToken && showRiskModal)} 
+          onClose={() => setShowRiskModal(false)} 
+        />
+      )}
+
       <Routes>
-        {/* Login is accessible on both PC and mobile, no DeviceCheck */}
+        {/* Login is mobile-only for user app */}
         <Route path="/login" element={authToken ? <Navigate to={user?.role === 'admin' ? "/admin" : "/dashboard"} replace /> : <Login />} />
         
-        {/* Mobile-only User Routes wrapped with DeviceCheck */}
-        <Route path="/dashboard" element={<ProtectedRoute mobileOnly={true}><Dashboard /></ProtectedRoute>} />
-        <Route path="/trade" element={<ProtectedRoute mobileOnly={true}><Trade /></ProtectedRoute>} />
-        <Route path="/history" element={<ProtectedRoute mobileOnly={true}><History /></ProtectedRoute>} />
-        <Route path="/profile" element={<ProtectedRoute mobileOnly={true}><Profile /></ProtectedRoute>} />
+        {/* User Routes (Strictly Mobile Only) */}
+        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/device" element={<ProtectedRoute><DeviceTab /></ProtectedRoute>} />
+        <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
+        <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
         
-        {/* Admin Panel — accessible on BOTH PC and mobile, NO DeviceCheck */}
-        <Route path="/admin" element={<ProtectedRoute requireAdmin={true}><AdminPanel /></ProtectedRoute>} />
+        {/* Legacy /trade redirect */}
+        <Route path="/trade" element={<Navigate to="/dashboard" replace />} />
+        
+        {/* Admin Panel — Desktop Control Panel (No SEBI modal, self-protecting) */}
+        <Route path="/admin" element={<AdminPanel />} />
 
         <Route path="*" element={<Navigate to={authToken ? (user?.role === 'admin' ? "/admin" : "/dashboard") : "/login"} replace />} />
       </Routes>
-      {authToken && <PWAPrompt />}
+      
+      {/* PWA Install Prompt Dialog: Active on all app routes */}
+      {isAppRoute && <PWAPrompt />}
     </>
   );
 }
 
 function App() {
-  const [showSplash, setShowSplash] = useState(true);
+  const [splashPhase, setSplashPhase] = useState('active'); // 'active' | 'fading' | 'hidden'
 
   useEffect(() => {
-    const timer = setTimeout(() => setShowSplash(false), 2500);
-    return () => clearTimeout(timer);
+    // Show splash for initial boot, then smoothly fade out
+    const fadeTimer = setTimeout(() => {
+      setSplashPhase('fading');
+    }, 1400);
+
+    const hideTimer = setTimeout(() => {
+      setSplashPhase('hidden');
+    }, 1900);
+
+    return () => {
+      clearTimeout(fadeTimer);
+      clearTimeout(hideTimer);
+    };
   }, []);
 
   return (
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <StateProvider>
-        {showSplash ? (
-          <Splash />
-        ) : (
-          <Router>
+        <Router>
+          <DeviceCheck>
             <MainAppRoutes />
-          </Router>
+          </DeviceCheck>
+        </Router>
+        {splashPhase !== 'hidden' && (
+          <Splash isFading={splashPhase === 'fading'} />
         )}
       </StateProvider>
     </GoogleOAuthProvider>

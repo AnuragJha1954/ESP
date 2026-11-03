@@ -9,12 +9,15 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'masked-icon.svg'],
       manifest: {
-        name: 'Infirow Tradopad',
-        short_name: 'Infirow',
-        description: 'Highly optimized futuristic trading terminal PWA',
-        theme_color: '#000000',
-        background_color: '#000000',
+        name: 'Tradopad Terminal',
+        short_name: 'Tradopad',
+        description: 'Physical Console Rapid Trading Terminal',
+        theme_color: '#060814',
+        background_color: '#060814',
         display: 'standalone',
+        orientation: 'portrait',
+        start_url: '/login',
+        scope: '/',
         icons: [
           {
             src: 'logo.png',

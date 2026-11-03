@@ -1,6 +1,11 @@
 node_modules/
 .env
 esp_database.sqlite
+database.sqlite
+tradopad.db
+*.sqlite
+*.sqlite3
+*.db
 email_preview.html
 .DS_Store
 frontend/node_modules/

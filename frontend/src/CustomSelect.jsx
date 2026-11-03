@@ -5,7 +5,6 @@ export default function CustomSelect({ value, onChange, options, disabled }) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
 
-  // Close when clicking outside
   useEffect(() => {
     const handleClick = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
@@ -23,71 +22,97 @@ export default function CustomSelect({ value, onChange, options, disabled }) {
       <div 
         onClick={() => !disabled && setIsOpen(!isOpen)}
         style={{
-          background: '#f3f4f6',
-          padding: '14px 16px',
-          borderRadius: '16px',
+          background: 'var(--surface-2)',
+          padding: '11px 14px',
+          borderRadius: '14px',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           cursor: disabled ? 'not-allowed' : 'pointer',
-          border: isOpen ? '2px solid #7c3aed' : '2px solid transparent',
-          boxShadow: isOpen ? '0 0 0 4px rgba(124, 58, 237, 0.15)' : 'none',
+          border: isOpen ? '1px solid var(--brand-violet)' : '1px solid var(--line)',
+          boxShadow: isOpen ? '0 0 0 3px var(--brand-soft)' : 'none',
           transition: 'all 0.2s ease',
-          backgroundColor: isOpen ? '#ffffff' : '#f3f4f6'
+          fontFamily: 'var(--font)'
         }}
       >
-        <span style={{ fontSize: '1.1rem', fontWeight: '600', color: '#000' }}>
+        <span style={{ 
+          fontSize: '13.5px', 
+          fontWeight: '600', 
+          color: 'var(--text)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+          paddingRight: '8px'
+        }}>
           {selectedOption?.label || value}
         </span>
-        <ChevronDown size={20} color="#333" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+        <ChevronDown 
+          size={16} 
+          color="var(--text-3)" 
+          style={{ 
+            transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)', 
+            transition: 'transform 0.2s',
+            flexShrink: 0
+          }} 
+        />
       </div>
 
       {isOpen && (
         <div style={{
           position: 'absolute',
-          top: 'calc(100% + 8px)',
+          top: 'calc(100% + 6px)',
           left: 0,
           right: 0,
-          background: 'rgba(25, 25, 25, 0.95)',
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-          border: '1px solid rgba(255,255,255,0.1)',
+          background: 'var(--surface)',
+          border: '1px solid var(--line)',
           borderRadius: '16px',
-          padding: '8px',
+          padding: '6px',
           zIndex: 1000,
-          boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+          boxShadow: '0 16px 36px -12px rgba(15, 23, 42, 0.18)',
           display: 'flex',
           flexDirection: 'column',
-          gap: '4px',
-          maxHeight: '250px',
+          gap: '2px',
+          maxHeight: '260px',
           overflowY: 'auto'
         }}>
-          {options.map(opt => (
-            <div 
-              key={opt.value}
-              onClick={() => {
-                if (!opt.disabled) {
-                  onChange(opt.value);
-                  setIsOpen(false);
-                }
-              }}
-              style={{
-                padding: '12px 16px',
-                borderRadius: '12px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                background: value === opt.value ? 'rgba(124, 58, 237, 0.2)' : 'transparent',
-                color: opt.disabled ? '#666' : '#fff',
-                cursor: opt.disabled ? 'not-allowed' : 'pointer',
-                fontWeight: value === opt.value ? '700' : '500',
-                transition: 'background 0.2s'
-              }}
-            >
-              <span style={{ fontSize: '1.05rem' }}>{opt.label}</span>
-              {value === opt.value && <Check size={18} color="#a78bfa" />}
-            </div>
-          ))}
+          {options.map(opt => {
+            const isSelected = value === opt.value;
+            return (
+              <div 
+                key={opt.value}
+                onClick={() => {
+                  if (!opt.disabled) {
+                    onChange(opt.value);
+                    setIsOpen(false);
+                  }
+                }}
+                style={{
+                  padding: '9px 12px',
+                  borderRadius: '10px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  background: isSelected ? 'var(--brand-soft)' : 'transparent',
+                  color: opt.disabled ? 'var(--text-3)' : (isSelected ? 'var(--brand-ink)' : 'var(--text)'),
+                  cursor: opt.disabled ? 'not-allowed' : 'pointer',
+                  fontWeight: isSelected ? '700' : '500',
+                  fontSize: '13.5px',
+                  fontFamily: 'var(--font)',
+                  transition: 'background 0.15s ease'
+                }}
+                onMouseEnter={e => {
+                  if (!isSelected && !opt.disabled) e.currentTarget.style.background = 'var(--surface-2)';
+                }}
+                onMouseLeave={e => {
+                  if (!isSelected && !opt.disabled) e.currentTarget.style.background = 'transparent';
+                }}
+              >
+                <span>{opt.label}</span>
+                {isSelected && <Check size={15} color="var(--brand-ink)" />}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
