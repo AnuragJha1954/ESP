@@ -400,24 +400,7 @@ const initDB = async () => {
             await db.run(`ALTER TABLE device_bindings ADD COLUMN last_heartbeat DATETIME;`);
         } catch (e) {}
 
-        // Auto-seed legacy User 12 device binding
-        try {
-            const devExists = await db.get(`SELECT id FROM devices WHERE device_id = 'DEV-0012'`);
-            if (!devExists) {
-                await db.run(`INSERT INTO devices (device_id, serial_number, hw_revision, firmware_version, status) VALUES ('DEV-0012', 'SN-TP-0012', 'rev1', '1.0.0', 'bound')`);
-            }
-            const bindingExists = await db.get(`SELECT id FROM device_bindings WHERE device_id = 'DEV-0012' AND status = 'active'`);
-            if (!bindingExists) {
-                await db.run(`INSERT INTO device_bindings (device_id, user_id, order_ref, status) VALUES ('DEV-0012', 12, 'INITIAL_PROVISION', 'active')`);
-            }
-            // Ensure User 1 (Admin) has active device binding to DEV-0012 if not already bound
-            const user1Binding = await db.get(`SELECT id FROM device_bindings WHERE user_id = 1 AND status = 'active'`);
-            if (!user1Binding) {
-                await db.run(`INSERT INTO device_bindings (device_id, user_id, order_ref, status) VALUES ('DEV-0012', 1, 'ADMIN_PRIMARY', 'active')`);
-            }
-        } catch (devErr) {
-            console.error("Device seeding notice:", devErr.message);
-        }
+// Device autoseeding disabled for clean production setup
 
         // Sync active Tuesday expiry calendar & update any outdated expiries
         await syncTuesdayExpiryCalendar(db);
