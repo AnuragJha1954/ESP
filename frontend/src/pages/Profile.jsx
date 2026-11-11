@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import NavBar from './NavBar';
-import { useAppState } from './StateContext';
-import { getRiskDisclosureStatus } from './services/complianceService';
+import NavBar from '../components/NavBar';
+import { useAppState } from '../context/StateContext';
+import { getRiskDisclosureStatus } from '../services/complianceService';
 
 export default function Profile() {
   const navigate = useNavigate();

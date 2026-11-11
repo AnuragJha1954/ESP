@@ -1,7 +1,7 @@
 module.exports = {
   apps: [{
     name: "fyers-trading-api",
-    script: "./index.js",
+    script: "./backend/index.js",
     env: {
       NODE_ENV: "production",
     }

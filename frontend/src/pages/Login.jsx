@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { useAppState } from './StateContext';
+import { useAppState } from '../context/StateContext';
 import { useNavigate } from 'react-router-dom';
 import { GoogleLogin } from '@react-oauth/google';
-import MarketTicker from './MarketTicker';
+import MarketTicker from '../components/MarketTicker';
 import { Lock, Mail, User, Shield, AlertCircle, CheckCircle2, ArrowRight, Eye, EyeOff, KeyRound, Cpu, Activity } from 'lucide-react';
 
 const DB_CANVAS = '#060814';

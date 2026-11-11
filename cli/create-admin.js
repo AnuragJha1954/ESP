@@ -25,7 +25,7 @@ async function main() {
     console.log('   TRADOPAD SINGLE-ADMIN SETUP CLI');
     console.log('========================================\n');
 
-    const dbPath = path.resolve(__dirname, '../esp_database.sqlite');
+    const dbPath = path.resolve(__dirname, '../backend/esp_database.sqlite');
     const db = await open({
         filename: dbPath,
         driver: sqlite3.Database

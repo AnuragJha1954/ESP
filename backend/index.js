@@ -1,5 +1,7 @@
-require('dotenv').config();
 const path = require('path');
+// Load environment variables from project root (.env) and local directory
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+require('dotenv').config();
 const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
@@ -25,6 +27,10 @@ const {
     getISTMidnightRemainingSeconds
 } = require('./brokerAdapters');
 
+// ============================================================================
+// MODULE 1: SYSTEM CORE, MIDDLEWARE & INITIALIZATION
+// Express 5, JSON body parsing, CORS policies, JWT Secret & Google OAuth client
+// ============================================================================
 const app = express();
 app.use(express.json());
 app.use(cors());
@@ -160,10 +166,16 @@ const syncTuesdayExpiryCalendar = async (database) => {
     }
 };
 
+// ============================================================================
+// MODULE 2: DATABASE PERSISTENCE LAYER (SQLite with WAL Mode)
+// Manages 16 relational tables: users, preferences, broker credentials,
+// trade history, waitlist, devices, bindings, keys, tokens, OTPs, audit log,
+// expiry calendar, device telemetry, kill switch, device lock, DPDP erasure
+// ============================================================================
 const initDB = async () => {
     try {
         db = await open({
-            filename: './esp_database.sqlite',
+            filename: path.join(__dirname, 'esp_database.sqlite'),
             driver: sqlite3.Database
         });
 
@@ -431,6 +443,10 @@ const logAudit = async (actorType, actorId, action, details, ip = null) => {
 // ------------------------------------------------------------------
 const sseClients = new Map(); // userId -> Set of res objects
 
+// ============================================================================
+// MODULE 3: REAL-TIME EVENT STREAMING & EMERGENCY CACHE HELPERS
+// SSE broadcast engine and synchronized in-memory Kill Switch & Lock state
+// ============================================================================
 const broadcastRealtimeEvent = (userId, eventName, data) => {
     const payload = `event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`;
     const targetUserId = userId ? Number(userId) : null;
@@ -636,6 +652,11 @@ const disengageKillSwitch = async (userId, liftedBy = 'APP') => {
     return payload;
 };
 
+// ============================================================================
+// MODULE 4: 6-POINT READINESS PRE-FLIGHT MATRIX
+// Enforces: 1) Hardware bound, 2) Broker configured, 3) Token valid today (IST),
+// 4) Console not locked, 5) Kill switch off, 6) Valid risk bounds
+// ============================================================================
 const evaluateReadiness = async (userId) => {
     const prefs = await db.get(`SELECT selected_broker, selected_index, selected_expiry FROM user_preferences WHERE user_id = ?`, [userId]);
     const broker = prefs ? prefs.selected_broker : 'Fyers';
@@ -717,6 +738,10 @@ const evaluateReadiness = async (userId) => {
 // ------------------------------------------------------------------
 // MIDDLEWARE
 // ------------------------------------------------------------------
+// ============================================================================
+// MODULE 5: SECURITY & AUTHENTICATION MIDDLEWARE
+// Dual-tier JWT verification for Operators (7d) and Administrators (24h)
+// ============================================================================
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -740,6 +765,10 @@ const authenticateAdmin = (req, res, next) => {
 // ------------------------------------------------------------------
 // DEDICATED ADMIN AUTHENTICATION & SESSION VERIFICATION
 // ------------------------------------------------------------------
+// ============================================================================
+// MODULE 6: ADMINISTRATIVE AUTHENTICATION APIS (/admin)
+// Dedicated sign-in, session verification, and logout for platform administrators
+// ============================================================================
 app.post('/api/admin/login', async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) {
@@ -818,6 +847,10 @@ app.post('/api/admin/logout', authenticateToken, authenticateAdmin, async (req, 
 // ------------------------------------------------------------------
 // AUTH API
 // ------------------------------------------------------------------
+// ============================================================================
+// MODULE 7: TRADER WEB TERMINAL AUTHENTICATION APIS
+// Username/Password sign-in, Google OAuth 2.0 SSO, and Email OTP verification
+// ============================================================================
 app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
     try {
@@ -974,6 +1007,11 @@ app.post('/api/waitlist/apply', async (req, res) => {
 // ------------------------------------------------------------------
 // ADMIN API
 // ------------------------------------------------------------------
+// ============================================================================
+// MODULE 8: ENTERPRISE ADMIN MANAGEMENT & GOVERNANCE APIS
+// User roster, hardware device registry, 1-click device binding/unbinding,
+// token health inspection, security audit trail, DPDP erasure approval
+// ============================================================================
 app.get('/api/admin/users', authenticateToken, authenticateAdmin, async (req, res) => {
     try {
         const users = await db.all(`
@@ -1684,6 +1722,11 @@ function isIndianMarketOpen() {
     }
 }
 
+// ============================================================================
+// MODULE 9: REAL-TIME INDIAN MARKET DATA ENGINE
+// Ingests live quotes for NIFTY 50, BANKNIFTY, FINNIFTY, SENSEX, INDIA VIX,
+// calculates ATM option strikes and provides resilient fallback pricing
+// ============================================================================
 async function fetchLiveIndianMarketData(force = false) {
     const now = Date.now();
     const marketOpen = isIndianMarketOpen();
@@ -1854,6 +1897,11 @@ app.get('/api/calendar/expiries', async (req, res) => {
     }
 });
 
+// ============================================================================
+// MODULE 10: PHYSICAL HARDWARE DEVICE APIS (ESP32 GATEWAY)
+// Direct REST endpoints for physical microcontrollers: boot handshake,
+// battery percentage telemetry heartbeat, broker toggle, and status checks
+// ============================================================================
 app.get('/api/device/status', authenticateToken, async (req, res) => {
     try {
         const readiness = await evaluateReadiness(req.user.id);
@@ -2131,6 +2179,11 @@ app.post(['/api/hardware/:userId/switch-broker', '/api/hardware/:userId/toggle-b
 // USER PREFERENCES API
 // ------------------------------------------------------------------
 
+// ============================================================================
+// MODULE 11: TRADER ACCOUNT, PREFERENCES & DPDP ERASURE APIS
+// Profile queries, broker selection, strike preferences, password changes,
+// DPDP Act 2023 data erasure request workflow and broker credential vault
+// ============================================================================
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
     try {
         const user = await db.get(`
@@ -2670,6 +2723,11 @@ const checkAndRunDailyTokenScheduler = async () => {
 
 setInterval(checkAndRunDailyTokenScheduler, 30 * 1000);
 
+// ============================================================================
+// MODULE 12: CORE EXECUTION ENGINE (TACTILE HARDWARE & WEB TRIGGERS)
+// Pre-flight check -> ATM Option Symbol Resolution -> Direct Broker API Dispatch
+// Sub-15ms execution route supporting CE (side=1) and PE (side=-1)
+// ============================================================================
 const executeTrade = async (req, res, side) => {
     const startTime = performance.now();
     const rawUserId = req.user?.id || req.params.userId || 1;
@@ -2990,6 +3048,10 @@ app.get('/api/user/kill-switch', authenticateToken, async (req, res) => {
 // ------------------------------------------------------------------
 // HARDWARE DEVICE LOCK / HALT CONSOLE (Anti-Theft / Keypad Lockout)
 // ------------------------------------------------------------------
+// ============================================================================
+// MODULE 13: EMERGENCY RISK GOVERNANCE & ANTI-THEFT CONSOLE LOCKOUT
+// Global kill switch (broker position liquidation) and remote hardware lock
+// ============================================================================
 app.post('/api/device/lock', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
@@ -3101,6 +3163,10 @@ app.get('/api/device/lock-status', authenticateToken, async (req, res) => {
 // ------------------------------------------------------------------
 // REALTIME EVENT STREAM (SSE) & ZERO-POLLING WEBHOOK BRIDGE
 // ------------------------------------------------------------------
+// ============================================================================
+// MODULE 14: REAL-TIME SERVER-SENT EVENTS (SSE) STREAM
+// Zero-polling event stream delivering live quotes, telemetry, and alerts
+// ============================================================================
 app.get(['/api/realtime/stream', '/api/events'], (req, res) => {
     let token = null;
     const authHeader = req.headers['authorization'];
@@ -3246,8 +3312,12 @@ app.post(['/api/webhook/device-heartbeat', '/api/webhook/:userId/device-heartbea
 app.post('/api/hardware/:userId/buy', (req, res) => executeTrade(req, res, 1));
 app.post('/api/hardware/:userId/sell', (req, res) => executeTrade(req, res, -1));
 
+// ============================================================================
+// MODULE 15: PRODUCTION CLIENT SERVING & SERVER BOOT
+// Static distribution serving for Vite PWA bundle with SPA routing fallback
+// ============================================================================
 // Static files for production client (Vite build)
-const frontendDist = path.join(__dirname, 'frontend', 'dist');
+const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
 if (fs.existsSync(frontendDist)) {
     app.use(express.static(frontendDist));
     app.use((req, res, next) => {

@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useAppState } from './StateContext';
-import NavBar from './NavBar';
-import CustomSelect from './CustomSelect';
-import { fetchExpiries, getLotMultiplier, getRiskSettings, saveRiskSettings } from './services/setupService';
+import { useAppState } from '../context/StateContext';
+import NavBar from '../components/NavBar';
+import CustomSelect from '../components/CustomSelect';
+import { fetchExpiries, getLotMultiplier, getRiskSettings, saveRiskSettings } from '../services/setupService';
 import { 
   fetchTokenState, 
   generateTokenNow, 
@@ -11,9 +11,9 @@ import {
   refreshAllTokensNow,
   formatTimeRemaining,
   formatISTTime
-} from './services/tokenService';
-import { triggerKillSwitchApi, fetchKillSwitchApi } from './services/deviceService';
-import { realtimeService } from './services/realtimeService';
+} from '../services/tokenService';
+import { triggerKillSwitchApi, fetchKillSwitchApi } from '../services/deviceService';
+import { realtimeService } from '../services/realtimeService';
 
 // Master Catalog of Supported Brokers
 const ALL_AVAILABLE_BROKERS = [

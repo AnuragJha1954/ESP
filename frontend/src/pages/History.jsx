@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import NavBar from './NavBar';
-import { useAppState } from './StateContext';
-import { fetchLedgerTrades, exportTradesCSV } from './services/ledgerService';
+import NavBar from '../components/NavBar';
+import { useAppState } from '../context/StateContext';
+import { fetchLedgerTrades, exportTradesCSV } from '../services/ledgerService';
 
 export default function History() {
   const { authToken } = useAppState();

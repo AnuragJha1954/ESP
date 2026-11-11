@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { realtimeService } from './services/realtimeService';
+import { realtimeService } from '../services/realtimeService';
 
 const INITIAL_TICKER = [
   { symbol: 'NSE/BSE', price: '22,702.40', change: '-47.35 (-0.21%)', up: false },

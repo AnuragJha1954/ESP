@@ -23,7 +23,7 @@ async function main() {
     console.log('   BREAK-GLASS ADMIN RECOVERY CLI');
     console.log('========================================\n');
 
-    const dbPath = path.resolve(__dirname, '../esp_database.sqlite');
+    const dbPath = path.resolve(__dirname, '../backend/esp_database.sqlite');
     const db = await open({
         filename: dbPath,
         driver: sqlite3.Database

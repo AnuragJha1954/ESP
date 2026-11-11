@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import NavBar from './NavBar';
-import { useAppState } from './StateContext';
+import NavBar from '../components/NavBar';
+import { useAppState } from '../context/StateContext';
 import { 
   fetchDeviceStatus, lockConsoleApi, unlockConsoleApi, fetchDeviceLockStatus, updateDeviceNickname 
-} from './services/deviceService';
-import { fetchLedgerTrades } from './services/ledgerService';
-import { realtimeService } from './services/realtimeService';
+} from '../services/deviceService';
+import { fetchLedgerTrades } from '../services/ledgerService';
+import { realtimeService } from '../services/realtimeService';
 
 export default function DeviceTab() {
   const navigate = useNavigate();
