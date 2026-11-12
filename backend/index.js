@@ -26,6 +26,7 @@ const {
     getBrokerTokenDetails, 
     getISTMidnightRemainingSeconds
 } = require('./brokerAdapters');
+const brokerVault = require('./brokers/brokerVault');
 
 // ============================================================================
 // MODULE 1: SYSTEM CORE, MIDDLEWARE & INITIALIZATION
@@ -417,6 +418,9 @@ const initDB = async () => {
         // Sync active Tuesday expiry calendar & update any outdated expiries
         await syncTuesdayExpiryCalendar(db);
 
+        // Initialize Multi-Broker Vault (Zerodha, Kotak, Groww, Dhan, Fyers, Delta)
+        await brokerVault.init(db);
+
         console.log("Database initialized successfully.");
     } catch (err) {
         console.error("Error initializing SQLite database:", err);
@@ -571,7 +575,14 @@ const executeEmergencyKillSwitch = async (userId, triggeredBy = 'DEVICE', reason
     // 3. ULTRA-FAST CONCURRENT FAN-OUT: Liquidate positions for target brokers in parallel
     const exitPromises = brokersToExit.map(async (bId) => {
         try {
-            return await exitAllBrokerPositions(bId, creds, db, parsedId);
+            // First attempt liquidation through the high-speed Multi-Broker Vault
+            try {
+                const vaultRes = await brokerVault.exitPositions(parsedId, bId);
+                return { broker: bId, status: 'success', details: vaultRes };
+            } catch (vErr) {
+                // Fallback to legacy exitAllBrokerPositions
+                return await exitAllBrokerPositions(bId, creds, db, parsedId);
+            }
         } catch (e) {
             return { broker: bId, status: 'error', message: e.message };
         }
@@ -2681,6 +2692,8 @@ const runDailyTokenGenerationForAllUsers = async (triggerType = 'SCHEDULED_6AM_C
         for (const user of users) {
             await runDailyTokenGenerationForUser(user.id, triggerType);
         }
+        // Run renewal for all registered brokers in the Multi-Broker Vault (Zerodha, Kotak, Groww, Dhan, Fyers, Delta)
+        await brokerVault.refreshAllTokens(db);
         await logAudit('system', 'all', 'SCHEDULED_6AM_TOKEN_GENERATION', { count: users.length });
     } catch (e) {
         console.error("[Auto-Cron] Error running daily token sync for all users:", e.message);
@@ -2793,13 +2806,32 @@ const executeTrade = async (req, res, side) => {
         const formattedSymbol = formatOptionSymbol(broker, indexName, expiryVal, strike, type);
 
         // 5. Execute Order over Pre-Warmed TCP/TLS Keep-Alive Connection Pool
-        const orderResponse = await executeBrokerTrade(broker, ctx.creds, db, userId, { 
-            quantity, 
-            strike, 
-            type, 
-            symbol: formattedSymbol, 
-            side 
-        });
+        let orderResponse;
+        try {
+            orderResponse = await brokerVault.executeOrder(userId, broker, { 
+                quantity, 
+                qty: quantity,
+                strike, 
+                type, 
+                symbol: formattedSymbol, 
+                side 
+            });
+            if (orderResponse && orderResponse.success === false) {
+                throw new Error(orderResponse.message || `${broker} order rejected`);
+            }
+        } catch (vaultErr) {
+            // Fallback to legacy adapter if not configured in brokerVault or if error occurred
+            if (vaultErr.message && !vaultErr.message.includes('No credentials configured')) {
+                throw vaultErr;
+            }
+            orderResponse = await executeBrokerTrade(broker, ctx.creds, db, userId, { 
+                quantity, 
+                strike, 
+                type, 
+                symbol: formattedSymbol, 
+                side 
+            });
+        }
 
         const latencyMs = Math.round(performance.now() - startTime);
 
@@ -2900,6 +2932,123 @@ app.get('/api/broker/tokens-status', authenticateToken, async (req, res) => {
     try {
         const payload = await getTokensStatusPayload(req.user.id);
         res.json(payload);
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ============================================================================
+// MODULE 11B: MULTI-BROKER VAULT API (ZERODHA, KOTAK, GROWW, DHAN, FYERS, DELTA)
+// ============================================================================
+
+// 1. Get all configured brokers in vault for authenticated user
+app.get('/api/user/broker-vault', authenticateToken, async (req, res) => {
+    try {
+        const brokers = await brokerVault.getUserBrokers(req.user.id);
+        res.json({
+            status: 'success',
+            data: brokers
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 2. Save or update credentials for any broker in vault
+app.post('/api/user/broker-vault', authenticateToken, async (req, res) => {
+    try {
+        const { broker, client_id, api_key, api_secret, pin, totp_secret, access_token, refresh_token, extra_config, is_active } = req.body;
+        if (!broker) {
+            return res.status(400).json({ status: 'error', message: 'Missing required broker parameter' });
+        }
+        const result = await brokerVault.saveCredentials(req.user.id, broker, {
+            client_id, api_key, api_secret, pin, totp_secret, access_token, refresh_token, extra_config, is_active
+        });
+        await logAudit('broker_vault', req.user.id, 'SAVE_CREDENTIALS', { broker }, req.ip);
+        res.json({
+            status: 'success',
+            message: `Credentials saved and cached in vault for ${broker}`,
+            data: result
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 3. Generate / renew session token on-demand for specific broker
+app.post('/api/user/broker-vault/:broker/generate-token', authenticateToken, async (req, res) => {
+    try {
+        const { broker } = req.params;
+        const result = await brokerVault.generateTokenForUser(req.user.id, broker);
+        await logAudit('broker_vault', req.user.id, 'GENERATE_TOKEN_SUCCESS', { broker }, req.ip);
+        res.json({
+            status: 'success',
+            message: `Session token generated for ${broker}`,
+            data: result
+        });
+    } catch (err) {
+        await logAudit('broker_vault', req.user.id, 'GENERATE_TOKEN_FAILED', { broker: req.params.broker, error: err.message }, req.ip);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 4. Validate if token is live and authorized for specific broker
+app.post('/api/user/broker-vault/:broker/validate-token', authenticateToken, async (req, res) => {
+    try {
+        const { broker } = req.params;
+        const result = await brokerVault.validateTokenForUser(req.user.id, broker);
+        res.json({
+            status: 'success',
+            data: result
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 5. Query live open positions for specific broker
+app.get('/api/user/broker-vault/:broker/positions', authenticateToken, async (req, res) => {
+    try {
+        const { broker } = req.params;
+        const positions = await brokerVault.getPositions(req.user.id, broker);
+        res.json({
+            status: 'success',
+            broker,
+            data: positions
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 6. Emergency exit / liquidate all positions for specific broker
+app.post('/api/user/broker-vault/:broker/exit-all', authenticateToken, async (req, res) => {
+    try {
+        const { broker } = req.params;
+        const result = await brokerVault.exitPositions(req.user.id, broker);
+        await logAudit('broker_vault', req.user.id, 'EMERGENCY_EXIT_ALL', { broker, result }, req.ip);
+        res.json({
+            status: 'success',
+            message: `All positions liquidation dispatched for ${broker}`,
+            data: result
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 7. Admin trigger for global morning token renewal across all brokers & users
+app.post('/api/admin/refresh-all-tokens', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        console.log(`[Admin] Global token renewal triggered by Admin #${req.user.id}`);
+        const vaultSummary = await brokerVault.refreshAllTokens(db);
+        await runDailyTokenGenerationForAllUsers('ADMIN_TRIGGER');
+        await logAudit('admin', req.user.id, 'ADMIN_GLOBAL_TOKEN_REFRESH', { summary: vaultSummary }, req.ip);
+        res.json({
+            status: 'success',
+            message: 'Global morning token renewal completed across all brokers',
+            summary: vaultSummary
+        });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
     }
