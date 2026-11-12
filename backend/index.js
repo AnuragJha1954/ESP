@@ -27,6 +27,16 @@ const {
     getISTMidnightRemainingSeconds
 } = require('./brokerAdapters');
 const brokerVault = require('./brokers/brokerVault');
+const http = require('http');
+const {
+    initDevicePushWebSocket,
+    setDatabase,
+    send_to_device,
+    push_to_user_devices,
+    getConnectedDevices,
+    isDeviceOnline,
+    validateAdminApiKey
+} = require('./devicePushService');
 
 // ============================================================================
 // MODULE 1: SYSTEM CORE, MIDDLEWARE & INITIALIZATION
@@ -421,6 +431,9 @@ const initDB = async () => {
         // Initialize Multi-Broker Vault (Zerodha, Kotak, Groww, Dhan, Fyers, Delta)
         await brokerVault.init(db);
 
+        // Connect database to Device Push Service
+        setDatabase(db);
+
         console.log("Database initialized successfully.");
     } catch (err) {
         console.error("Error initializing SQLite database:", err);
@@ -604,6 +617,9 @@ const executeEmergencyKillSwitch = async (userId, triggeredBy = 'DEVICE', reason
     // Broadcast SSE push immediately
     broadcastRealtimeEvent(parsedId, 'kill_switch', payload);
 
+    // Push alert frame to user's connected physical devices (with 3 haptic buzzes)
+    push_to_user_devices(parsedId, 'Emergency Kill Switch Activated', 'KILL SWITCH', 8000, 3).catch(() => {});
+
     // Asynchronous non-blocking write-behind logging
     setImmediate(async () => {
         try {
@@ -648,6 +664,9 @@ const disengageKillSwitch = async (userId, liftedBy = 'APP') => {
     };
 
     broadcastRealtimeEvent(parsedId, 'kill_switch', payload);
+
+    // Push notification to user's physical devices (1 haptic buzz)
+    push_to_user_devices(parsedId, 'Emergency Kill Switch Disengaged', 'READY', 4000, 1).catch(() => {});
 
     setImmediate(async () => {
         try {
@@ -2854,6 +2873,7 @@ const executeTrade = async (req, res, side) => {
                 `, [userId, broker, formattedSymbol, type, side, quantity, 'Success']);
                 await logAudit('trade', userId, 'TRADE_SUCCESS', { broker, symbol: formattedSymbol, side, quantity, latencyMs }, req.ip);
                 broadcastRealtimeEvent(userId, 'trade_executed', { broker, symbol: formattedSymbol, type, side, quantity, latencyMs, timestamp: new Date().toISOString() });
+                push_to_user_devices(userId, `${side === 1 ? 'BUY' : 'SELL'} ${quantity}x ${formattedSymbol}`, 'ORDER FILLED', 4000, 1).catch(() => {});
             } catch (dbErr) {
                 console.error("[ASYNC LOGGING ERROR]:", dbErr.message);
             }
@@ -2878,6 +2898,7 @@ const executeTrade = async (req, res, side) => {
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `, [userId, broker, req.body?.symbol || 'Unknown', req.body?.type || 'Unknown', side, req.body?.qty || req.body?.quantity || 0, `Failed: ${error.message}`]);
                 await logAudit('trade', userId, 'TRADE_FAILED', { broker, side, error: error.message, latencyMs }, req.ip);
+                push_to_user_devices(userId, `Failed: ${error.message}`.slice(0, 84), 'ORDER REJECTED', 5000, 2).catch(() => {});
             } catch (dbErr) {}
         });
     }
@@ -3462,6 +3483,86 @@ app.post('/api/hardware/:userId/buy', (req, res) => executeTrade(req, res, 1));
 app.post('/api/hardware/:userId/sell', (req, res) => executeTrade(req, res, -1));
 
 // ============================================================================
+// MODULE 14B: PHYSICAL DEVICE PUSH MESSAGING API (WEBSOCKET & ADMIN HTTP PUSH)
+// ============================================================================
+
+// 1. Push notification to physical device screen with haptic buzzer
+app.post('/api/hardware/push/:deviceId', validateAdminApiKey, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const { title, message, duration, buzz, data } = req.body || {};
+
+        if (!message || typeof message !== 'string') {
+            return res.status(400).json({
+                status: "error",
+                message: "'message' (string) is required"
+            });
+        }
+
+        const pushResult = await send_to_device(deviceId, message, title, duration, buzz, data);
+
+        if (!pushResult.delivered) {
+            return res.status(404).json({
+                status: "error",
+                message: "Device offline",
+                device_id: deviceId
+            });
+        }
+
+        return res.status(200).json({
+            status: "success",
+            device_id: deviceId,
+            id: pushResult.id,
+            delivered: true,
+            acked: !!pushResult.acked
+        });
+    } catch (err) {
+        return res.status(500).json({
+            status: "error",
+            message: err.message
+        });
+    }
+});
+
+// 2. Query all currently connected online devices
+app.get('/api/hardware/devices/online', validateAdminApiKey, (req, res) => {
+    try {
+        const devices = getConnectedDevices();
+        return res.status(200).json({
+            status: "success",
+            devices: devices.map(d => ({
+                device_id: d.device_id,
+                connected_at: d.connected_at,
+                last_seen: d.last_seen
+            }))
+        });
+    } catch (err) {
+        return res.status(500).json({
+            status: "error",
+            message: err.message
+        });
+    }
+});
+
+// 3. Query online status for a specific device
+app.get('/api/hardware/devices/:deviceId/online', validateAdminApiKey, (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const online = isDeviceOnline(deviceId);
+        return res.status(200).json({
+            status: "success",
+            device_id: deviceId,
+            online
+        });
+    } catch (err) {
+        return res.status(500).json({
+            status: "error",
+            message: err.message
+        });
+    }
+});
+
+// ============================================================================
 // MODULE 15: PRODUCTION CLIENT SERVING & SERVER BOOT
 // Static distribution serving for Vite PWA bundle with SPA routing fallback
 // ============================================================================
@@ -3477,9 +3578,14 @@ if (fs.existsSync(frontendDist)) {
     });
 }
 
+const server = http.createServer(app);
+initDevicePushWebSocket(server, db);
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`Server running locally on port ${PORT}`);
 });
 
 module.exports = app;
+app.server = server;
+app.send_to_device = send_to_device;
