@@ -37,6 +37,7 @@ const {
     isDeviceOnline,
     validateAdminApiKey
 } = require('./devicePushService');
+const instrumentMaster = require('./instruments/instrumentMaster');
 
 // ============================================================================
 // MODULE 1: SYSTEM CORE, MIDDLEWARE & INITIALIZATION
@@ -434,12 +435,15 @@ const initDB = async () => {
         // Connect database to Device Push Service
         setDatabase(db);
 
+        // Initialize Instrument Master (NSE, BSE, Delta Exchange through Dec 2027)
+        await instrumentMaster.init(db);
+
         console.log("Database initialized successfully.");
     } catch (err) {
         console.error("Error initializing SQLite database:", err);
     }
 };
-initDB();
+const dbReadyPromise = initDB();
 
 // ------------------------------------------------------------------
 // HELPER FUNCTIONS
@@ -2821,15 +2825,34 @@ const executeTrade = async (req, res, side) => {
         const indexName = symbol || ctx.selectedIndex || 'NIFTY';
         const expiryVal = ctx.selectedExpiry || '';
 
-        // 4. In-Memory String Formatting (< 0.002 ms)
-        const formattedSymbol = formatOptionSymbol(broker, indexName, expiryVal, strike, type);
+        // Calculate quantity: support both raw quantity and lot multiplier (e.g. NIFTY lot_size = 65)
+        let cleanQty = Number(quantity);
+        if (req.body?.is_lots === true || req.body?.in_lots === true || req.body?.lots) {
+            const lotMultiplier = instrumentMaster.getLotSize(indexName);
+            cleanQty = cleanQty * lotMultiplier;
+        }
+
+        // 4. In-Memory String Formatting (< 0.002 ms) via Instrument Master
+        let formattedSymbol;
+        try {
+            const resolution = instrumentMaster.resolveBrokerSymbols({
+                symbol: indexName,
+                strike,
+                type,
+                expiry: expiryVal
+            });
+            const bKey = brokerVault.normalizeBroker(broker).toLowerCase();
+            formattedSymbol = resolution.brokers[bKey] || formatOptionSymbol(broker, indexName, expiryVal, strike, type);
+        } catch (e) {
+            formattedSymbol = formatOptionSymbol(broker, indexName, expiryVal, strike, type);
+        }
 
         // 5. Execute Order over Pre-Warmed TCP/TLS Keep-Alive Connection Pool
         let orderResponse;
         try {
             orderResponse = await brokerVault.executeOrder(userId, broker, { 
-                quantity, 
-                qty: quantity,
+                quantity: cleanQty, 
+                qty: cleanQty,
                 strike, 
                 type, 
                 symbol: formattedSymbol, 
@@ -3069,6 +3092,98 @@ app.post('/api/admin/refresh-all-tokens', authenticateToken, authenticateAdmin, 
             status: 'success',
             message: 'Global morning token renewal completed across all brokers',
             summary: vaultSummary
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// ============================================================================
+// MODULE 11C: INSTRUMENT MASTER API (NSE, BSE, DELTA EXCHANGE THROUGH DEC 2027)
+// ============================================================================
+
+// 1. Get all active instruments with lot sizes, strike gaps, segments
+app.get('/api/instruments', async (req, res) => {
+    try {
+        const { segment, exchange } = req.query;
+        const instruments = await instrumentMaster.getAllAsync({ segment, exchange });
+        res.json({
+            status: 'success',
+            count: instruments.length,
+            data: instruments
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 2. Get detailed instrument config with all expiries through Dec 2027
+app.get('/api/instruments/:symbol', async (req, res) => {
+    try {
+        const { symbol } = req.params;
+        const instrument = await instrumentMaster.getAsync(symbol);
+        if (!instrument) {
+            return res.status(404).json({ status: 'error', message: `Instrument '${symbol}' not found` });
+        }
+        res.json({
+            status: 'success',
+            data: instrument
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 3. Get all valid expiry dates through Dec 2027 for a specific instrument
+app.get('/api/instruments/:symbol/expiries', async (req, res) => {
+    try {
+        const { symbol } = req.params;
+        const instrument = await instrumentMaster.getAsync(symbol);
+        if (!instrument) {
+            return res.status(404).json({ status: 'error', message: `Instrument '${symbol}' not found` });
+        }
+        res.json({
+            status: 'success',
+            symbol: instrument.symbol,
+            count: instrument.expiries.length,
+            current_expiry: instrument.current_expiry,
+            expiries: instrument.expiries
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 4. Update instrument lot size or configuration dynamically (Admin Only)
+app.put('/api/admin/instruments/:symbol', authenticateToken, authenticateAdmin, async (req, res) => {
+    try {
+        const { symbol } = req.params;
+        const updated = await instrumentMaster.updateInstrument(symbol, req.body);
+        await logAudit('admin', req.user.id, 'UPDATE_INSTRUMENT_MASTER', { symbol, updates: req.body }, req.ip);
+        res.json({
+            status: 'success',
+            message: `Instrument ${symbol} updated successfully`,
+            data: updated
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 5. Multi-Broker Tradingsymbol Resolution Helper
+app.post('/api/instruments/resolve', async (req, res) => {
+    try {
+        const { symbol, strike, type, expiry } = req.body || {};
+        if (!symbol || !strike || !type) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Missing required fields: symbol, strike, type'
+            });
+        }
+        const resolution = instrumentMaster.resolveBrokerSymbols({ symbol, strike, type, expiry });
+        res.json({
+            status: 'success',
+            data: resolution
         });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
@@ -3589,3 +3704,5 @@ server.listen(PORT, () => {
 module.exports = app;
 app.server = server;
 app.send_to_device = send_to_device;
+app.dbReadyPromise = dbReadyPromise;
+app.instrumentMaster = instrumentMaster;
